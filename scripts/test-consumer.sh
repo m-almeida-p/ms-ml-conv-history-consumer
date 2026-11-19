@@ -13,8 +13,8 @@
 # It touches only rows whose conversation id starts with "t-" (it removes them first and afterwards) and its own topic.
 # The real rows of camel_history, the real topic and the public.conversation_* tables of ms-ml-conv-history-bs are never
 # touched. (An earlier version truncated the three tables, which would have wiped the real history the API serves.)
-# Needs: the cluster up, the camel_history migrations applied (ml-genai-agents-bs-testing:
-# make migrations/up SERVICE=history FLOW=camel_conversation), python3.
+# Needs: the cluster up, the camel_history migrations applied (ms-ml-conv-history-migrations:
+# make migrations/up FLOW=camel_conversation), python3.
 
 # shellcheck source=./common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"

@@ -36,7 +36,7 @@ cp .env.example .env                # then set GITHUB_MALMEIDAP_PAT (git-ignored
 ```
 
 Then in Karavan open `ms-ml-conv-history-consumer` and press the **top-right Run**. Needs the `camel_history` tables, which come from the
-migrations of `ml-genai-agents-bs-testing`.
+migrations of [`ms-ml-conv-history-migrations`](../ms-ml-conv-history-migrations) (`make migrations/up`).
 
 ## Documentation
 

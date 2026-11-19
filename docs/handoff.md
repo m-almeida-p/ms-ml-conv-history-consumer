@@ -57,8 +57,8 @@ Needs the shared cluster up (`../cluster/scripts/up.sh`, network `yape-local`) a
 These stand until the owner changes them.
 
 - **Never run the Go service** (`ms-ml-conv-history-bs`) or its consumer.
-- **Never commit in `../ml-genai-agents-bs-testing`.** It is the producer repo and holds the owner's uncommitted migrations. A **new table
-  goes through a migration there**, not through SQL here. Never run that repo's `run.sh --clean`.
+- **Never commit in `../ml-genai-agents-bs-testing`.** It is the producer repo. Never run that repo's `run.sh --clean`.
+- **A new table goes through a migration in `../ms-ml-conv-history-migrations`**, not through SQL here (that repo holds the history migrations, copied from the producer repo).
 - **Never reset or delete the consumer group `ms-ml-conv-history-bs`** (the original service's). Resetting `ms-ml-conv-history-consumer`
   is allowed only on purpose, with the project stopped.
 - **Secrets only in `.env`** (git-ignored). Never in chat, in a file, in a log or in a command line you paste. Never run `bash -x` on a
@@ -110,5 +110,5 @@ It is a local PoC and says so. Known, accepted by the owner:
 |---|---|---|
 | 1 | Rule for Kafka commit failures | `CommitFailedException` and `RebalanceInProgressException` are in no `onException` rule, so one would be dead-lettered as `unexpected`. Add a rule that ignores them (the record redelivers); not done because it could not be provoked to test |
 | 2 | Dependency audit | `postgresql` is declared at 42.7.12; at run time Camel's downloader also puts 42.7.13 on the classpath (which one loads was not determined). HikariCP 6.2.1 and json-schema-validator 1.5.6 have newer **major** versions that were not taken. No scan tool was run |
-| 3 | The owner's migrations `000001`-`000004` | Uncommitted in the producer repo. The tables here depend on them |
+| 3 | The tables here depend on `ms-ml-conv-history-migrations` | Copied from the producer repo, where the same folders still exist as duplicates; the owner decides when to remove them there |
 | 4 | The old consumer is still in `ms-ml-camel-conv-history-bs` | Both run at once, on purpose: different ports, names and groups ([table](karavan-setup.md#running-next-to-ms-ml-camel-conv-history-bs)). They write the same three tables, which is safe because the inbox refuses a duplicate, but they do the same work twice |
