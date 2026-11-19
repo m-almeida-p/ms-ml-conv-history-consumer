@@ -1,0 +1,58 @@
+- route:
+    id: routeReceive
+    description: 1 Receive
+    note: "One record, from Kafka to a committed offset. Docs: design.md > Level 2: the routes."
+    nodePrefixId: routeReceive
+    routeConfigurationId: errorRules
+    from:
+      id: fromEventsTopic
+      description: Topic (Event-Driven Consumer)
+      note: "Reads {{app.topic}} as group {{app.kafka.groupId}}. Auto commit is off. Docs: conv-history-consumer.md > Settings."
+      uri: kafka
+      parameters:
+        topic: "{{app.topic}}"
+        brokers: "{{app.kafka.brokers}}"
+        groupId: "{{app.kafka.groupId}}"
+        autoOffsetReset: earliest
+        autoCommitEnable: false
+        allowManualCommit: true
+        breakOnFirstError: true
+        valueDeserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      steps:
+        - bean:
+            id: decodeRecord
+            description: 1.1 Decode (Message Translator)
+            note: "Schema id, registry schema, contract, projection. A bad record goes to route 3. Docs: conv-history-consumer.md > Schema assurance."
+            ref: decoder
+            method: decode
+        - choice:
+            id: routeByRecordKind
+            description: 1.2 Route (Content-Based Router)
+            note: "A tombstone is skipped; any other record goes to route 2. Docs: conv-history-consumer.md > What happens to each kind of record."
+            when:
+              - id: whenTombstone
+                description: Tombstone
+                expression:
+                  simple:
+                    expression: "${header.Tombstone} == true"
+                steps:
+                  - log:
+                      id: logTombstoneSkipped
+                      description: 1.2.1 Skip tombstone
+                      message: "Tombstone skipped topic=${header.CamelKafkaTopic} partition=${header.CamelKafkaPartition} offset=${header.CamelKafkaOffset}"
+            otherwise:
+              id: otherwiseStore
+              description: Any other record
+              steps:
+                - to:
+                    id: callStoreRoute
+                    description: 1.2.2 Store (route 2)
+                    uri: direct
+                    parameters:
+                      name: store
+        - bean:
+            id: commitOffset
+            description: 1.3 Commit (Guaranteed Delivery)
+            note: "The offset moves only now. After a crash the record comes back and step 2.1 ignores the repeat. Docs: conv-history-consumer.md > What happens to each kind of record."
+            ref: offsetCommit
+            method: commit

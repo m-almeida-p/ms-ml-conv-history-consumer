@@ -1,0 +1,153 @@
+- routeConfiguration:
+    id: errorRules
+    # Dead Letter Channel for every unexpected error. Anything no onException rule below recognizes is a bug or
+    # data nobody foresaw. Retrying a bug cannot succeed and an endless loop would hide it behind a stuck
+    # partition, so it is tried 3 more times and then sent to route 3 as reason=unexpected. The record is kept
+    # in the log with its body, so it can be replayed after the fix.
+    errorHandler:
+      id: errorHandlerDeadLetter
+      deadLetterChannel:
+        id: deadLetterChannel
+        deadLetterUri: direct:deadLetter
+        redeliveryPolicy:
+          id: redeliveryPolicyUnexpected
+          maximumRedeliveries: "3"
+          redeliveryDelay: "500"
+          useExponentialBackOff: "true"
+          backOffMultiplier: "2"
+          logRetryAttempted: "true"
+          retryAttemptedLogLevel: WARN
+          logStackTrace: "true"
+          logExhausted: "true"
+    onException:
+      # A record that can never be stored: it breaks the Schema Registry schema or the contract, or cannot be
+      # decoded. Dead-letter it and go on; retrying cannot help and must not block the partition.
+      - onException:
+          id: onPoison
+          description: Poison (Invalid Message Channel)
+          note: "Refused for good by step 1.1 or 2.2. Reason and field are already set. Docs: conv-history-consumer.md > What happens to each kind of record."
+          exception:
+            - org.apache.camel.ValidationException
+          # No retries: an onException rule inherits the Dead Letter Channel's 3 retries unless it says otherwise,
+          # and a poison record can never succeed.
+          redeliveryPolicy:
+            maximumRedeliveries: "0"
+          handled:
+            constant:
+              expression: "true"
+          steps:
+            - to:
+                id: poisonToDeadLetter
+                description: To route 3
+                uri: direct
+                parameters:
+                  name: deadLetter
+
+      # The store refuses the data for good: a violated constraint or data it cannot hold (SQLSTATE class 23 or 22).
+      # Only the SQLSTATE is kept: Postgres puts the failing row in the error detail.
+      - onException:
+          id: onStoreRejected
+          description: Database refuses the data
+          note: "SQLSTATE 22 or 23: the table cannot hold it. Only the code is logged. Docs: conv-history-consumer.md > What happens to each kind of record."
+          exception:
+            - org.springframework.dao.DataIntegrityViolationException
+          redeliveryPolicy:
+            maximumRedeliveries: "0"
+          handled:
+            constant:
+              expression: "true"
+          steps:
+            - bean:
+                id: nameStoreRefusal
+                description: Name the refusal
+                note: "Reason store-rejected, field sqlstate-<code>, found in the cause chain. Docs: conv-history-consumer.md > What happens to each kind of record."
+                ref: storeRefusal
+                method: name
+            - to:
+                id: storeRejectedToDeadLetter
+                description: To route 3
+                uri: direct
+                parameters:
+                  name: deadLetter
+
+      # Known transient failures: the database is unreachable or times out, or the schema registry cannot be reached.
+      # The record itself is fine, so it is never dead-lettered for this. It is retried in place, forever, the wait
+      # doubling from 1 s to 30 s, and its offset does not move until it works (as ms-ml-conv-history-bs does).
+      - onException:
+          id: onTransient
+          description: Dependency down (retry forever)
+          note: "Database or registry unreachable: retried forever, offset not moved. Docs: conv-history-consumer.md > What happens to each kind of record."
+          exception:
+            - org.springframework.dao.TransientDataAccessException
+            - org.springframework.dao.DataAccessResourceFailureException
+            - org.springframework.jdbc.CannotGetJdbcConnectionException
+            - java.net.ConnectException
+            - java.net.SocketTimeoutException
+            - java.io.IOException
+            - java.io.UncheckedIOException
+          redeliveryPolicy:
+            maximumRedeliveries: "-1"
+            redeliveryDelay: "1000"
+            useExponentialBackOff: "true"
+            backOffMultiplier: "2"
+            maximumRedeliveryDelay: "30000"
+            logRetryAttempted: "true"
+            retryAttemptedLogLevel: WARN
+            logStackTrace: "false"
+            logExhausted: "false"
+
+- route:
+    id: routeDeadLetter
+    description: 3 Dead-letter
+    note: "A record that cannot be stored, written to the log. Docs: conv-history-consumer.md > The dead-letter log."
+    nodePrefixId: routeDeadLetter
+    routeConfigurationId: errorRules
+    from:
+      id: fromDirectDeadLetter
+      description: Called by the error rules
+      uri: direct
+      parameters:
+        name: deadLetter
+      steps:
+        - choice:
+            id: nameUnexpectedReason
+            description: 3.1 Name the reason if none
+            note: "Poison already has a reason; an unexpected error gets its exception class and message (Content-Based Router). Docs: conv-history-consumer.md > The dead-letter log."
+            when:
+              - id: whenNoReason
+                description: No reason yet
+                expression:
+                  simple:
+                    expression: "${exchangeProperty.dlqReason} == null"
+                steps:
+                  - setProperty:
+                      id: unexpectedReason
+                      name: dlqReason
+                      expression:
+                        constant:
+                          expression: unexpected
+                  - setProperty:
+                      id: unexpectedField
+                      name: dlqField
+                      expression:
+                        simple:
+                          expression: "${exception.class.simpleName}"
+                  - setProperty:
+                      id: unexpectedDetail
+                      name: dlqDetail
+                      expression:
+                        simple:
+                          expression: "${exception.message}"
+        - log:
+            id: logDeadLetter
+            description: 3.2 Write the dead-letter log
+            note: "One ERROR line on logger dlq, with the body. Docs: conv-history-consumer.md > The dead-letter log."
+            logName: dlq
+            loggingLevel: ERROR
+            message: "DLQ reason=${exchangeProperty.dlqReason} field=${exchangeProperty.dlqField} topic=${header.CamelKafkaTopic} partition=${header.CamelKafkaPartition} offset=${header.CamelKafkaOffset} key=${exchangeProperty.rawKey} detail=${exchangeProperty.dlqDetail} body=${exchangeProperty.rawText}"
+        - bean:
+            id: commitDeadLetterOffset
+            description: 3.3 Commit (Guaranteed Delivery)
+            note: "The offset moves, so no record blocks a partition. Docs: conv-history-consumer.md > What happens to each kind of record."
+            ref: offsetCommit
+            method: commit

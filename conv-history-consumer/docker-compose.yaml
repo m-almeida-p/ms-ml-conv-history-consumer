@@ -1,0 +1,9 @@
+services:
+  conv-history-consumer:
+    container_name: conv-history-consumer
+    image: conv-history-consumer
+    restart: always
+    ports:
+      - "8081:8080"
+    networks:
+      - karavan

@@ -1,0 +1,98 @@
+# Apache Camel Karavan for ms-ml-conv-history-consumer.
+#
+# Karavan is a visual designer for Camel integrations. Its projects are stored in
+# this same Git repository (KARAVAN_GIT_REPOSITORY in .env), so the only state
+# kept locally is Karavan's own database.
+#
+# Joins the shared cluster network, so containers Karavan starts reach kafka,
+# redis and the rest by their cluster service names. Nothing in ../cluster
+# changes. Requires the cluster to be up first:
+#   ../cluster/scripts/up.sh
+# Without it, `up` fails with "network yape-local declared as external, but
+# could not be found".
+#
+# Setup: copy .env.example to .env and paste the GitHub token. .env is
+# git-ignored.
+#
+# Start:  ./scripts/up.sh   (also stop.sh, start.sh, logs.sh, clean.sh)
+# Open:   http://localhost:9998
+#
+# The container and port names are the same as in ms-ml-camel-conv-history-bs: run only one of the two Karavan stacks at a time.
+name: ms-ml-conv-history-consumer
+
+services:
+  karavan:
+    image: ghcr.io/apache/camel-karavan:4.22.2
+    container_name: karavan
+    restart: unless-stopped
+    depends_on:
+      karavan-db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${KARAVAN_PORT:-9998}:8080"
+    environment:
+      KARAVAN_GIT_REPOSITORY: ${KARAVAN_GIT_REPOSITORY:-}
+      KARAVAN_GIT_USERNAME: ${KARAVAN_GIT_USERNAME:-}
+      # The token is never written in this file; it comes from .env.
+      KARAVAN_GIT_PASSWORD: ${GITHUB_MALMEIDAP_PAT:-}
+      KARAVAN_GIT_BRANCH: ${KARAVAN_GIT_BRANCH:-main}
+      # Karavan builds images and pushes them to the registry service below.
+      KARAVAN_CONTAINER_IMAGE_REGISTRY: registry:5000
+      KARAVAN_CONTAINER_IMAGE_REGISTRY_USERNAME: ""
+      KARAVAN_CONTAINER_IMAGE_REGISTRY_PASSWORD: ""
+      KARAVAN_CONTAINER_IMAGE_GROUP: karavan
+      # Containers Karavan starts join the shared network.
+      KARAVAN_DOCKER_NETWORK: yape-local
+      # DevMode (Run in the UI) runs the routes in this image. Karavan's default,
+      # apache/camel-karavan-devmode, is not on Docker Hub; it is published on ghcr.io
+      # next to the Karavan image, with the same version tag.
+      KARAVAN_DEVMODE_IMAGE: ghcr.io/apache/camel-karavan-devmode:4.22.2
+      KARAVAN_DATASOURCE_USERNAME: ${KARAVAN_DATASOURCE_USERNAME:-karavan}
+      KARAVAN_DATASOURCE_PASSWORD: ${KARAVAN_DATASOURCE_PASSWORD:-karavan}
+      KARAVAN_DATASOURCE_URL: jdbc:postgresql://karavan-db:5432/karavan
+      KARAVAN_DATASOURCE_SCHEMAS: public
+    volumes:
+      # Gives Karavan control of the host Docker engine, which it needs to build
+      # and run containers. Treat the Karavan UI as root-equivalent on this host.
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - "org.apache.camel.karavan/type=internal"
+    networks: [yape-local]
+
+  # Karavan's own Postgres, apart from the cluster `db` (Debezium, trust auth).
+  # Not published on the host: only Karavan reaches it.
+  karavan-db:
+    image: postgres:18
+    container_name: karavan-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: karavan
+      POSTGRES_USER: ${KARAVAN_DATASOURCE_USERNAME:-karavan}
+      POSTGRES_PASSWORD: ${KARAVAN_DATASOURCE_PASSWORD:-karavan}
+    volumes:
+      # Postgres 18 keeps data in a version folder under /var/lib/postgresql.
+      - karavan_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d karavan"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+    networks: [yape-local]
+
+  registry:
+    image: registry:2
+    container_name: karavan-registry
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${KARAVAN_REGISTRY_PORT:-5555}:5000"
+    labels:
+      - "org.apache.camel.karavan/type=internal"
+    networks: [yape-local]
+
+volumes:
+  karavan_postgres_data:
+
+networks:
+  yape-local:
+    # Created by the shared cluster (../cluster).
+    external: true

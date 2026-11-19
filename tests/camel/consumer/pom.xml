@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Unit and route tests of conv-history-consumer, in JUnit 5 and Camel 4.22.2 (the version Karavan's DevMode runs).
+
+  It compiles the project's OWN Java files (../../../conv-history-consumer), not copies, so a test breaks when the code does. Karavan
+  compiles those files at start-up with joor; here Maven does, which also checks that they compile as ordinary Java.
+  Run it with scripts/test-camel.sh (a Maven container on the cluster network, because the route tests use the cluster's Postgres).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.apache.camel.karavan.demo</groupId>
+  <artifactId>conv-history-consumer-tests</artifactId>
+  <version>1</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <camel.version>4.22.2</camel.version>
+    <junit.version>5.11.4</junit.version>
+  </properties>
+
+  <dependencies>
+    <dependency><groupId>org.apache.camel</groupId><artifactId>camel-core</artifactId><version>${camel.version}</version></dependency>
+    <dependency><groupId>org.apache.camel</groupId><artifactId>camel-main</artifactId><version>${camel.version}</version></dependency>
+    <dependency><groupId>org.apache.camel</groupId><artifactId>camel-kafka</artifactId><version>${camel.version}</version></dependency>
+    <dependency><groupId>com.networknt</groupId><artifactId>json-schema-validator</artifactId><version>1.5.6</version></dependency>
+    <dependency><groupId>org.apache.camel</groupId><artifactId>camel-jackson</artifactId><version>${camel.version}</version></dependency>
+    <dependency><groupId>org.apache.camel</groupId><artifactId>camel-sql</artifactId><version>${camel.version}</version></dependency>
+    <dependency><groupId>org.apache.camel</groupId><artifactId>camel-yaml-dsl</artifactId><version>${camel.version}</version></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><version>42.7.12</version></dependency>
+    <dependency><groupId>com.zaxxer</groupId><artifactId>HikariCP</artifactId><version>6.2.1</version></dependency>
+    <dependency><groupId>org.slf4j</groupId><artifactId>slf4j-simple</artifactId><version>2.0.16</version><scope>test</scope></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>${junit.version}</version><scope>test</scope></dependency>
+  </dependencies>
+
+  <build>
+    <sourceDirectory>${project.basedir}/../../../conv-history-consumer</sourceDirectory>
+    <testSourceDirectory>${project.basedir}/src/test/java</testSourceDirectory>
+    <plugins>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version></plugin>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.2</version>
+        <configuration><trimStackTrace>true</trimStackTrace></configuration></plugin>
+    </plugins>
+  </build>
+</project>

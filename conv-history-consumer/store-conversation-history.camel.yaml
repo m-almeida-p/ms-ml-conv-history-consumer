@@ -1,0 +1,67 @@
+- route:
+    id: routeStore
+    description: 2 Store
+    note: "Write one event, once, to the three tables. Called by step 1.2.2. Docs: design.md > Route 2."
+    nodePrefixId: routeStore
+    routeConfigurationId: errorRules
+    from:
+      id: fromDirectStore
+      description: Called by step 1.2.2
+      uri: direct
+      parameters:
+        name: store
+      steps:
+        - to:
+            id: writeEvent
+            description: 2.1 Write (Idempotent Consumer)
+            note: "One statement, one transaction: the inbox, then message and summary for a chat event. Docs: conv-history-consumer.md > The store."
+            uri: sql
+            parameters:
+              dataSource: "#pgDataSource"
+              outputType: SelectOne
+              query: >-
+                WITH ins AS (
+                  INSERT INTO conversation_inbox (conversation_id, sequence, event_name, event_version, payload, metadata, correlation_id, id_yape_account, actor, flow, occurred_at, kafka_topic, kafka_partition, kafka_offset, projected_at)
+                  VALUES (:#conversationId, :#sequence, :#eventName, :#eventVersion, CAST(:#payload AS jsonb), CAST(:#metadata AS jsonb), :#correlationId, :#idYapeAccount, :#actor, :#flow, :#occurredAt, :#kafkaTopic, :#kafkaPartition, :#kafkaOffset, now())
+                  ON CONFLICT (conversation_id, sequence) DO NOTHING
+                  RETURNING 1
+                ), msg AS (
+                  INSERT INTO conversation_messages (conversation_id, sequence, role, author_id, type, text, truncated, event_name, id_yape_account, flow, occurred_at)
+                  SELECT CAST(:#conversationId AS varchar), CAST(:#sequence AS int), CAST(:#role AS text), CAST(:#authorId AS text), 'text', CAST(:#text AS text), CAST(:#truncated AS boolean), CAST(:#eventName AS varchar), CAST(:#idYapeAccount AS text), CAST(:#flow AS text), CAST(:#occurredAt AS timestamptz)
+                  WHERE EXISTS (SELECT 1 FROM ins) AND CAST(:#projectable AS boolean)
+                  ON CONFLICT (conversation_id, sequence) DO UPDATE SET
+                    role = EXCLUDED.role, author_id = EXCLUDED.author_id, type = EXCLUDED.type, text = EXCLUDED.text,
+                    truncated = EXCLUDED.truncated, event_name = EXCLUDED.event_name, id_yape_account = EXCLUDED.id_yape_account,
+                    flow = EXCLUDED.flow, occurred_at = EXCLUDED.occurred_at
+                  RETURNING (xmax = 0) AS is_new, id_yape_account, conversation_id, occurred_at
+                ), summary AS (
+                  INSERT INTO conversation_summaries (id_yape_account, conversation_id, message_count, first_occurred_at, last_occurred_at)
+                  SELECT id_yape_account, conversation_id, 1, occurred_at, occurred_at FROM msg WHERE is_new AND id_yape_account IS NOT NULL
+                  ON CONFLICT (id_yape_account, conversation_id) DO UPDATE SET
+                    message_count = conversation_summaries.message_count + 1,
+                    first_occurred_at = LEAST(conversation_summaries.first_occurred_at, EXCLUDED.first_occurred_at),
+                    last_occurred_at = GREATEST(conversation_summaries.last_occurred_at, EXCLUDED.last_occurred_at)
+                  RETURNING 1
+                )
+                SELECT (SELECT count(*) FROM ins) AS inserted,
+                       (SELECT count(*) FROM msg) AS projected,
+                       EXISTS (
+                         SELECT 1 FROM conversation_inbox x
+                         WHERE x.conversation_id = :#conversationId AND x.sequence = :#sequence
+                           AND x.event_name = :#eventName AND x.event_version = :#eventVersion
+                           AND x.payload = CAST(:#payload AS jsonb) AND x.metadata = CAST(:#metadata AS jsonb)
+                           AND x.correlation_id IS NOT DISTINCT FROM CAST(:#correlationId AS text)
+                           AND x.id_yape_account IS NOT DISTINCT FROM CAST(:#idYapeAccount AS text)
+                           AND x.actor IS NOT DISTINCT FROM CAST(:#actor AS text)
+                           AND x.flow IS NOT DISTINCT FROM CAST(:#flow AS text)
+                       ) AS same
+        - bean:
+            id: decideOutcome
+            description: 2.2 Decide the outcome
+            note: "stored, duplicate, or conflict (a different event at the same position: route 3). Docs: conv-history-consumer.md > What happens to each kind of record."
+            ref: storeOutcome
+            method: evaluate
+        - log:
+            id: logOutcome
+            description: 2.3 Log the outcome
+            message: "Event ${header.outcome} conversation=${header.conversationId} sequence=${header.sequence} partition=${header.CamelKafkaPartition} offset=${header.CamelKafkaOffset} projected=${header.projected} invalid=${header.invalid}"
