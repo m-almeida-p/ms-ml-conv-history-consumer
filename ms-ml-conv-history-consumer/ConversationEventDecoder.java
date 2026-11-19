@@ -60,7 +60,6 @@ public class ConversationEventDecoder {
     private static final int MAX_NAME_LENGTH = 128;
     private static final String MAKER_AUTHOR_ID = "ms-ml-genai-agent-bs";
     /** The most of a record the dead-letter log carries. */
-    private static final int MAX_LOGGED_CHARS = 16384;
 
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private final Map<Integer, JsonSchema> schemas = new ConcurrentHashMap<>();
@@ -113,15 +112,6 @@ public class ConversationEventDecoder {
         configure(exchange);
         Message in = exchange.getMessage();
         byte[] value = in.getBody(byte[].class);
-        Object key = in.getHeader("CamelKafkaKey");
-        byte[] keyBytes = key == null ? null : (key instanceof byte[] b ? b : key.toString().getBytes(StandardCharsets.UTF_8));
-        // The record exactly as Kafka delivered it, kept before anything changes the body: the dead-letter table stores these bytes, and a
-        // replay must publish the same ones. The Kafka headers are read now too, while only the record's own are on the message.
-        exchange.setProperty("rawValueBytes", value);
-        exchange.setProperty("rawKeyBytes", keyBytes);
-        exchange.setProperty("rawHeaders", kafkaHeaders(in));
-        // The key is framed like the value (header + {"conversation_id": ...}), so show it readable in the dead-letter log.
-        exchange.setProperty("rawKey", keyBytes == null ? "" : printable(keyBytes));
         exchange.setProperty("invalid", false);
         in.setHeader("Tombstone", false);
 
@@ -319,41 +309,6 @@ public class ConversationEventDecoder {
 
     // ---- helpers ----
 
-    /**
-     * The Kafka headers of the record as a JSON object, name to text. Camel's own headers (Camel...) are left out. A value that is
-     * not text without a NUL is kept as "base64:...", because jsonb cannot hold a NUL and the dead-letter row must not fail on it.
-     */
-    static String kafkaHeaders(Message in) {
-        Map<String, String> out = new LinkedHashMap<>();
-        for (Map.Entry<String, Object> header : in.getHeaders().entrySet()) {
-            if (header.getKey().startsWith("Camel") || header.getValue() == null) {
-                continue;
-            }
-            Object v = header.getValue();
-            out.put(header.getKey(), v instanceof byte[] bytes ? headerText(bytes) : String.valueOf(v).replace("\u0000", ""));
-        }
-        try {
-            return JSON.writeValueAsString(out);
-        } catch (JsonProcessingException e) {
-            return "{}";
-        }
-    }
-
-    private static String headerText(byte[] bytes) {
-        try {
-            String text = StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(bytes)).toString();
-            if (text.indexOf('\u0000') < 0) {
-                return text;
-            }
-        } catch (java.nio.charset.CharacterCodingException e) {
-            // not UTF-8: fall through to base64
-        }
-        return "base64:" + java.util.Base64.getEncoder().encodeToString(bytes);
-    }
-
     /** Records why the record is refused for the dead-letter log, then builds the exception. */
     private static PoisonRecordException poison(Exchange exchange, String reason, String field, String detail) {
         exchange.setProperty("dlqReason", reason);
@@ -436,27 +391,5 @@ public class ConversationEventDecoder {
     private static String leafName(String location) {
         int dot = location.lastIndexOf('.');
         return dot < 0 ? location : location.substring(dot + 1);
-    }
-
-    /** The record as readable text for the dead-letter log: control characters (the header's zero bytes) are shown as \xNN. */
-    static String printable(byte[] value) {
-        if (value == null) {
-            return "";
-        }
-        String text = new String(value, StandardCharsets.UTF_8);
-        StringBuilder out = new StringBuilder(Math.min(text.length(), MAX_LOGGED_CHARS) + 16);
-        for (int i = 0; i < text.length(); i++) {
-            if (out.length() >= MAX_LOGGED_CHARS) {
-                out.append("...(truncated, ").append(text.length()).append(" chars)");
-                break;
-            }
-            char c = text.charAt(i);
-            if (c < 0x20 && c != '\t' && c != '\n' || c == 0x7f) {
-                out.append(String.format("\\x%02x", (int) c));
-            } else {
-                out.append(c);
-            }
-        }
-        return out.toString();
     }
 }

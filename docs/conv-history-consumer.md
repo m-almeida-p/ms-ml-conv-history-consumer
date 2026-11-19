@@ -20,7 +20,7 @@ each step:
 |---|---|
 | **1 Receive** | 1.1 Decode and validate the record (schema id, registry schema, contract, projection) → 1.2 Route by kind of record (a tombstone is skipped, any other record goes to route 2) The offset is committed by the Kamelet source when route 1 returns, not by a step of its own |
 | **2 Store** | 2.1 Write inbox, message and summary with one statement in one transaction → 2.2 Decide stored, duplicate or conflict → 2.3 Log the outcome |
-| **3 Dead-letter** | 3.1 Name the reason if no rule did → 3.2 Prepare the row → 3.3 Write the dead letter → 3.4 Write the log line → 3.5 Commit the offset. It commits its own offset: a handled error stops the route that called route 1, so the Kamelet's commit does not run for it |
+| **3 Dead-letter** | 3.1 Keep it: one call to the shared **dead-letter-sink** Kamelet, which names the reason, writes the row, writes the log line and commits the offset. The sink commits because a handled error stops the route that called route 1, so the source Kamelet's commit does not run for it |
 
 Records that fail validation or that the store refuses go to route 3. A database or registry outage is retried
 forever and the offset does not move. Anything unexpected is retried 3 times, then goes to route 3 as `reason=unexpected`.
@@ -40,7 +40,6 @@ tables `ms-ml-conv-history-bs` (the Go service) uses. The consumer of `ms-ml-cam
 | `PROJECT.md` | The legend, the numbering and the vocabulary, shown with the project in Karavan. |
 | `ConversationEventDecoder.java` | Schema id check, registry schema validation, contract, projection. |
 | `StoreOutcome.java` | Reads the store statement's result: `stored`, `duplicate`, or a conflict. |
-| `DeadLetterRecord.java` | Builds the parameters of the dead-letter row from the record the decoder kept, the Kafka coordinates and the reason. |
 | `StoreRefusal.java` | Names a store refusal for the dead-letter row: reason `store-rejected`, field `sqlstate-<code>`, found in the cause chain. |
 | `PoisonRecordException.java` | The exception for a record that can never be stored. |
 | `application.properties` | Camel settings, dependencies, the datasource and the `app.*` settings. |
@@ -51,7 +50,7 @@ registers itself with `@BindToRegistry`, so the route refers to them by name (`d
 
 The route does not read Kafka itself: it starts from the Kamelet **`kafka-at-least-once-source`**, which lives in the repository's
 [`kamelets/`](../kamelets) folder (Karavan's *Custom Kamelets* project), not in this project's folder. It reads the topic with auto commit off,
-hands each record to route 1, and **commits the offset when route 1 returns normally** (stored or skipped); a dead letter commits in route 3 (step 3.5). If the route retries forever,
+hands each record to route 1, and **commits the offset when route 1 returns normally** (stored or skipped); a dead letter commits in the dead-letter sink. If the route retries forever,
 it never returns and the offset does not move. [Why and how to reuse it](kamelets.md).
 
 ## Settings
@@ -160,7 +159,7 @@ because the line keeps the body, the records can be replayed after the fix.
 
 ## The dead-letter table
 
-*Designer: route 3, steps 3.1 to 3.5.*
+*Designer: route 3, step 3.1 (the call to the sink). The sink is the Kamelet [`dead-letter-sink`](kamelets.md#the-dead-letter-sink).*
 
 A record the consumer refuses for good is written to **`dead_letter.dead_letters`**, a table shared by every consumer
 (`ms-ml-conv-history-migrations`, folder `shared/dead_letter`; its README has the columns, the replay and the retention). One row per
@@ -170,13 +169,14 @@ source record and service, the record **exactly as Kafka delivered it**:
 |---|---|
 | `service` | Its consumer group, `app.kafka.groupId` (`ms-ml-conv-history-consumer`). |
 | `source_topic`, `source_partition`, `source_offset`, `source_timestamp` | Where the record is in Kafka. With `service` they are the unique key: a retried insert changes nothing. |
-| `record_key`, `record_value`, `headers` | The original bytes of the key and the value (the decoder keeps them before anything changes the body; the Kamelet delivers the key as bytes) and the Kafka headers as JSON. A replay publishes these bytes again. |
+| `record_key`, `record_value`, `headers` | The original bytes of the key and the value (the source Kamelet keeps the value in `originalValue` before the decoder changes the body, and delivers the key as bytes) and the Kafka headers as JSON. A replay publishes these bytes again. |
 | `reason`, `field`, `detail`, `exception_class` | Why (tables above). `field` is the offending field, for `store-rejected` the SQLSTATE, for `unexpected` the exception class. NULs are removed from the texts, so the insert cannot fail on them. |
 | `attempt` | 1 for a refused record; for `unexpected`, `app.unexpected.maxRetries` + 1 (the same setting drives the retries). |
 | `status` | Starts `open`. Whoever replays or discards the record sets `replayed` or `discarded` and `resolved_at`. |
 
-**Steps.** 3.1 names the reason if none did (an unexpected error). 3.2 (`DeadLetterRecord.java`) builds the row's parameters. 3.3 writes the
-row with `ON CONFLICT DO NOTHING`. 3.4 writes the log line. 3.5 commits the offset: a handled error stops the route that called route 1, so the Kamelet's own commit never runs for a dead letter.
+**Steps.** Route 3 only calls the shared Kamelet [`dead-letter-sink`](kamelets.md#the-dead-letter-sink) with `service` (this consumer's group) and `maxRetries`. The sink names the reason if none did
+(an unexpected error), builds the row (a Groovy script), writes it with `ON CONFLICT DO NOTHING`, writes the log line, and commits the offset: a handled error stops the route that called
+route 1, so the source Kamelet's own commit never runs for a dead letter.
 
 **The record is never lost.** The offset moves only after the row is written. If the insert cannot be done, the route throws and the record
 is read again: a database outage is retried in place (tested: a refused record that meets an outage waits, and is written once once the
@@ -258,7 +258,7 @@ Two scripts, both against the local cluster; `test-consumer.sh` uses a **throwaw
 | Script | What it proves | Time |
 |---|---|---|
 | `./scripts/test-consumer.sh` | 46 checks. Chat, non-chat, duplicate and conflicting events; summary counts; 19 dead-lettered records, each with its exact reason (17 poison, and 2 that the store refuses: a NUL in a text and in a jsonb); a tombstone; no lag (no poison record blocks a partition); an unreachable database is retried, not dead-lettered, and recovers; an unexpected error is dead-lettered after 3 retries. | about 1.5 min |
-| `./scripts/test-camel.sh consumer` | 95 JUnit tests: the decoder at the edges of every field (65, against the real Schema Registry), and routes 2 and 3 on the real Postgres (15: stored, duplicate, conflict, NUL, a million characters, 16 threads on one event, 30 on one conversation). About 25 s. | |
+| `./scripts/test-camel.sh consumer` | 90 JUnit tests: the decoder at the edges of every field (63, against the real Schema Registry), routes 2 and 3 on the real Postgres (19: stored, duplicate, conflict, NUL, a million characters, 16 threads on one event, 30 on one conversation, the dead-letter row and its commit), and the dead-letter sink Kamelet on its own (8). About 30 s. | |
 
 `test-consumer.sh` touches only the rows whose conversation id starts with `t-` (it deletes them before and after), and the JUnit tests only rows keyed `jt-`.
 Neither writes to the real topic, to `camel_history` or to any other schema.

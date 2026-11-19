@@ -35,7 +35,7 @@ your steps should tolerate seeing a record twice (the store here does: the inbox
 | Your route | What the Kamelet does |
 |---|---|
 | Finishes normally | Commits the offset |
-| Handles the error itself (`onException` with `handled`, for example a dead-letter route) | **Does not commit.** A handled error stops the route that called yours, so the Kamelet's commit step never runs. **Your dead-letter route must commit the offset itself**, after it has kept the record (this project: step 3.5). Measured: without it, the offset of a dead-lettered record never moved (15 uncommitted offsets in one run), and a record dead-lettered by the Dead Letter Channel did not commit either |
+| Handles the error itself (`onException` with `handled`, for example a dead-letter route) | **Does not commit.** A handled error stops the route that called yours, so the Kamelet's commit step never runs. The [dead-letter sink](#the-dead-letter-sink) commits for it, after it has kept the record. Measured: without that commit, the offset of a dead-lettered record never moved (15 uncommitted offsets in one run), and a record dead-lettered by the Dead Letter Channel did not commit either |
 | Retries forever inside a step (a dependency is down) | Never returns, so the offset does not move; nothing is skipped |
 | **Throws and nothing handles it** | **Does not commit and reads the same record again, over and over; every record behind it waits.** Measured: three deliveries of the failed record in seven seconds, offset stuck at it, the next record never delivered |
 
@@ -56,6 +56,48 @@ headers kept (`CamelKafkaPartition`, `CamelKafkaOffset`, `CamelKafkaKey` and the
 record above). The Kamelet declares its own dependency (`camel:kafka`), so a project needs no `camel.jbang.dependencies` line for it.
 
 In the Karavan Designer the Kamelet appears as **"Kafka at-least-once source"** with these four fields, so a parameter is edited in a form.
+
+## The dead-letter sink
+
+A second Kamelet, [`kamelets/dead-letter-sink.kamelet.yaml`](../kamelets/dead-letter-sink.kamelet.yaml), does what every consumer must do with a record it can never
+handle, so a new consumer calls it instead of copying a route and a Java class:
+
+1. names the reason (a record the error rules already refused has its own; anything else is an `unexpected` error named after its exception),
+2. writes **one row to `dead_letter.dead_letters`**, the record exactly as Kafka delivered it (the original value, the key as bytes, the Kafka headers as JSON),
+3. writes **one `ERROR` line** to the log, without the record,
+4. **commits the offset**, after the row is written.
+
+The consumer's whole route 3 is the call:
+
+```yaml
+- route:
+    id: routeDeadLetter
+    routeConfigurationId: errorRules
+    from:
+      uri: direct
+      parameters:
+        name: deadLetter
+      steps:
+        - to:
+            uri: kamelet:dead-letter-sink
+            parameters:
+              service: "{{app.kafka.groupId}}"
+              maxRetries: "{{app.unexpected.maxRetries}}"
+```
+
+| Parameter | Required | Default | What it is |
+|---|---|---|---|
+| `service` | yes | | Who dead-letters the record: the consumer group. Part of the row's unique key |
+| `maxRetries` | no | `3` | The retries of the consumer's Dead Letter Channel; the row's `attempt` is this plus one for an unexpected error. Pass the same setting the policy reads |
+| `dataSource` | no | `pgDataSource` | The name of the `DataSource` bean of the consumer's Postgres, without the `#` |
+
+**What it needs.** A consumer that starts from `kafka-at-least-once-source`, which keeps the original value in the exchange property `originalValue` (the decoder replaces
+the body, so the bytes must be kept before) and delivers the key as bytes. A `DataSource` bean, the shared table (migrations `shared/dead_letter`), and error rules whose
+`onException` rules and Dead Letter Channel send the record to the route above. The rules set `dlqReason`, `dlqField` and `dlqDetail` for a refused record; the sink needs nothing else.
+
+**Why it is a Kamelet and not a bean in each project.** Karavan copies only the Kamelet file into a run, not Java classes from another folder, so the row is built by a Groovy
+script inside the Kamelet (`camel:groovy`, `camel:jackson` and `camel:sql` are declared by it, like `camel:kafka` is by the source). The same Kamelet then serves
+every consumer, and the JUnit tests (`DeadLetterSinkTest`) test it once.
 
 ## Create another consumer
 
@@ -131,8 +173,8 @@ The log step is where a consumer's own work goes. This project's consumer replac
 1. **A decoder** (a bean) for its own record format and contract: here `ConversationEventDecoder.java`, step 1.1.
 2. **A store route** for its own tables, called with `direct:`: here `store-conversation-history.camel.yaml`.
 3. **Error rules and a dead-letter route**: here `handle-errors-and-dead-letters.camel.yaml`. The route references them with
-   `routeConfigurationId: errorRules`. A record the consumer can never handle must end as *handled*, and the route that handles it must **commit the
-   offset itself** (`${header.CamelKafkaManualCommit.commit()}`, step 3.5) after keeping the record: the Kamelet's commit does not run for a handled error.
+   `routeConfigurationId: errorRules`. A record the consumer can never handle must end as *handled* and go to the [dead-letter sink](#the-dead-letter-sink),
+   which keeps it in the shared table and commits its offset (the source Kamelet's commit does not run for a handled error). Route 3 is one call to the sink: copy it.
 
 Copy the project folder `ms-ml-conv-history-consumer/` as the starting point, rename it, change the three `app.*` settings, the container
 name and the port, and replace the decoder and the store. Route 1 and the Kamelet stay as they are.

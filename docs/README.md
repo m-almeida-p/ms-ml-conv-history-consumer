@@ -23,8 +23,8 @@ Guides for the Apache Camel Karavan setup in this repository and for the Kafka c
 │                               the tests (test-consumer.sh, test-camel.sh for the JUnit, test-all.sh runs them all),
 │                               check-docs.py and scan-secrets.sh (run it before every push)
 ├── ms-ml-conv-history-consumer/      The Karavan project: the Kafka consumer that builds the conversation history
-├── kamelets/                         Karavan's "Custom Kamelets" project: kafka-at-least-once-source, reusable by every consumer
-├── kamelets/                   Karavan's "Custom Kamelets" project: kafka-at-least-once-source, reused by every consumer
+├── kamelets/                         Karavan's "Custom Kamelets" project: kafka-at-least-once-source and dead-letter-sink, reusable by every consumer
+├── kamelets/                   Karavan's "Custom Kamelets" project: kafka-at-least-once-source and dead-letter-sink, reused by every consumer
 ├── tests/camel/consumer/       The JUnit module: it compiles the project's own Java files
 └── docs/                       This documentation
 ```

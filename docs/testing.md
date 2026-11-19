@@ -35,8 +35,8 @@ One Maven module, run in a Maven container on the cluster network (`maven:3.9-ec
 
 | Class | What it proves |
 |---|---|
-| `DecoderTest` | The decoder at the edge of every field, against the real Schema Registry (read only); tombstones; that the original key, value and Kafka headers are kept as bytes, also for a refused record |
-| `DeadLetterRecordTest` | The parameters of the dead-letter row, with no database: coordinates, the bytes as they came, NULs removed from the texts, the detail cut, the attempt (1, or the retries plus 1 for an unexpected error), the exception class only for an unexpected error |
+| `DecoderTest` | The decoder at the edge of every field, against the real Schema Registry (read only); tombstones |
+| `DeadLetterSinkTest` | The shared `dead-letter-sink` Kamelet on its own, on the cluster's Postgres: the bytes as they came, a text key as UTF-8 or no key, the Kafka headers as JSON (base64 for what is not text, Camel's own and a route's left out), NULs removed from the texts and the detail cut, the attempt (1, or the retries plus 1 for an unexpected error), the exception class only for an unexpected error, nulls where the exchange has nothing, the readable key for the log |
 | `StoreRouteTest` | Routes 2 and 3 with their real error rules on the cluster's Postgres: stored, duplicate, conflict, a NUL (refused for good), a million characters, 16 threads on one event, 30 on one conversation; and the dead-letter table: a refused record stored byte for byte with its coordinates, the same record twice leaving one row, a record the store refuses keeping the original bytes and not the decoded event, an unexpected error with its class and attempts |
 
 **What the JUnit tests do not cover:** route 1 and the Kamelet (the Kafka subscription and the offset commit). `test-consumer.sh` does: it runs the project with its Kamelet, as Karavan does. The route tests assert that route 2 does **not** commit (the Kamelet does) and that route 3 commits exactly once, and only after its dead-letter row exists (a handled error stops the route that called route 1, so the Kamelet's commit does not run for a dead letter).
@@ -57,6 +57,9 @@ retries with its class and four attempts, even when the store's schema is missin
 4. Run `./scripts/test-all.sh`, and `python3 -I scripts/check-docs.py` if you touched a route, a label or a doc.
 
 ## Last run
+
+2026-11-19, route 3 became the shared Kamelet `dead-letter-sink`: **all 3 suites green**: docs check, **90 JUnit tests** (the row's unit tests and the decoder's byte tests moved to `DeadLetterSinkTest`, 8 tests on
+the Kamelet; `DecoderTest` 63, `StoreRouteTest` 19) and **46 system checks** with both Kamelets in the loop (the outage, the trailing refused record and the unexpected error included). No test row left.
 
 2026-11-19, with the dead letters in `dead_letter.dead_letters`: **all 3 suites green**: docs check, **95 JUnit tests** and **46 system checks**, no test row
 left in any table.

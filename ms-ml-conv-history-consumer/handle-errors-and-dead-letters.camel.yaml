@@ -99,7 +99,7 @@
 - route:
     id: routeDeadLetter
     description: 3 Dead-letter
-    note: "A record that cannot be stored, written to the dead-letter table and to the log. Docs: conv-history-consumer.md > The dead-letter table."
+    note: "A record that cannot be stored goes to the shared dead-letter-sink Kamelet: one row in dead_letter.dead_letters, one log line, and the offset committed. Docs: conv-history-consumer.md > The dead-letter table."
     nodePrefixId: routeDeadLetter
     routeConfigurationId: errorRules
     from:
@@ -109,68 +109,11 @@
       parameters:
         name: deadLetter
       steps:
-        - choice:
-            id: nameUnexpectedReason
-            description: 3.1 Name the reason if none
-            note: "Poison already has a reason; an unexpected error gets its exception class and message (Content-Based Router). Docs: conv-history-consumer.md > The dead-letter table."
-            when:
-              - id: whenNoReason
-                description: No reason yet
-                expression:
-                  simple:
-                    expression: "${exchangeProperty.dlqReason} == null"
-                steps:
-                  - setProperty:
-                      id: unexpectedReason
-                      name: dlqReason
-                      expression:
-                        constant:
-                          expression: unexpected
-                  - setProperty:
-                      id: unexpectedField
-                      name: dlqField
-                      expression:
-                        simple:
-                          expression: "${exception.class.simpleName}"
-                  - setProperty:
-                      id: unexpectedDetail
-                      name: dlqDetail
-                      expression:
-                        simple:
-                          expression: "${exception.message}"
-        - bean:
-            id: prepareDeadLetter
-            description: 3.2 Prepare the row
-            note: "Builds the row's parameters from the record the decoder kept (the original key, value and Kafka headers), the Kafka coordinates, the reason and the attempt. Texts lose any NUL. Docs: conv-history-consumer.md > The dead-letter table."
-            ref: deadLetterRecord
-            method: prepare
         - to:
-            id: writeDeadLetter
-            description: 3.3 Write the dead letter
-            note: "One row in dead_letter.dead_letters, the record exactly as it came. ON CONFLICT DO NOTHING makes a retry harmless. If the insert fails the record is read again: it is never lost (Dead Letter Channel). Docs: conv-history-consumer.md > The dead-letter table."
-            uri: sql
+            id: toDeadLetterSink
+            description: 3.1 Keep it (dead-letter-sink)
+            note: "The Kamelet names the reason (an unexpected error is named after its exception), writes the row, the log line, and commits the offset. Only the service differs between consumers. Docs: conv-history-consumer.md > The dead-letter table."
+            uri: kamelet:dead-letter-sink
             parameters:
-              dataSource: "#pgDataSource"
-              query: >-
-                INSERT INTO dead_letter.dead_letters
-                  (service, source_topic, source_partition, source_offset, source_timestamp, record_key, record_value, headers,
-                   reason, field, detail, exception_class, attempt)
-                VALUES
-                  (:#service, :#topic, :#partition, :#offset, CAST(:#timestamp AS timestamptz), CAST(:#key AS bytea),
-                   CAST(:#value AS bytea), CAST(:#headers AS jsonb), :#reason, CAST(:#field AS text), CAST(:#detail AS text),
-                   CAST(:#exceptionClass AS text), :#attempt)
-                ON CONFLICT (service, source_topic, source_partition, source_offset) DO NOTHING
-        - log:
-            id: logDeadLetter
-            description: 3.4 Write the dead-letter log
-            note: "One ERROR line on logger dlq: reason, field, coordinates, key and detail. The record itself is in the table, not here. Docs: conv-history-consumer.md > The dead-letter table."
-            logName: dlq
-            loggingLevel: ERROR
-            message: "DLQ reason=${exchangeProperty.dlqReason} field=${exchangeProperty.dlqField} topic=${header.CamelKafkaTopic} partition=${header.CamelKafkaPartition} offset=${header.CamelKafkaOffset} key=${exchangeProperty.rawKey} detail=${exchangeProperty.dlqDetail}"
-        - script:
-            id: commitDeadLetter
-            description: 3.5 Commit the offset
-            note: "A handled error stops the route that called route 1, so the Kamelet source's own commit never runs for a dead letter. The offset moves here, after the row is written. Docs: conv-history-consumer.md > The dead-letter table."
-            expression:
-              simple:
-                expression: "${header.CamelKafkaManualCommit.commit()}"
+              service: "{{app.kafka.groupId}}"
+              maxRetries: "{{app.unexpected.maxRetries}}"

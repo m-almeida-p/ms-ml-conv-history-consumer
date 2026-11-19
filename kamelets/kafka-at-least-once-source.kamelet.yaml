@@ -19,7 +19,8 @@ spec:
       commit the offset itself, after it has kept the record. If the route retries forever (a dependency is
       down), the offset does not move. The message body is the raw record (bytes), and so is the key
       (the header CamelKafkaKey); the Kafka headers are kept. Nothing is decoded here, so a consumer can store
-      the record exactly as it came. Auto commit is off; the commit is done here for a record the route finishes
+      the record exactly as it came: the original value is also kept in the exchange property originalValue, because a
+      decoder replaces the body and the dead-letter-sink Kamelet stores the bytes. Auto commit is off; the commit is done here for a record the route finishes
       normally.
     required:
       - topic
@@ -67,6 +68,12 @@ spec:
         keyDeserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
         valueDeserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
       steps:
+        - setProperty:
+            id: keepOriginal
+            name: originalValue
+            expression:
+              simple:
+                expression: "${body}"
         - to:
             id: toRoute
             uri: kamelet:sink

@@ -22,6 +22,7 @@ The Karavan project is the folder [`ms-ml-conv-history-consumer/`](ms-ml-conv-hi
 | `application.properties` | Settings (`app.*`), dependencies, datasource | |
 
 The Kafka reading and the offset commit are not in the project: they are in the **Kamelet** [`kamelets/kafka-at-least-once-source.kamelet.yaml`](kamelets/kafka-at-least-once-source.kamelet.yaml), which every consumer can reuse
+The dead letters are not in the project either: route 3 is one call to the shared Kamelet [`kamelets/dead-letter-sink.kamelet.yaml`](kamelets/dead-letter-sink.kamelet.yaml), which writes the refused record to `dead_letter.dead_letters`, writes the log line and commits the offset ([how it works](docs/kamelets.md#the-dead-letter-sink)).
 ([how: docs/kamelets.md](docs/kamelets.md)).
 
 Route 2 cannot be reached without route 1 (the only caller) and route 3 (where a record it refuses goes), so the three stay together.

@@ -22,7 +22,7 @@ Microsoft Foundry**: no sync project, no API project, no token broker. The behav
 | Tables | The schema `camel_history` | The schema **`history`** (the Go service's tables). The consumer of `ms-ml-camel-conv-history-bs` stays on `camel_history`, because it also needs the Foundry maps. Their migrations are `history/conversation` and `history/camel_conversation` in `ms-ml-conv-history-migrations` |
 | Compose and `.env` | Karavan, its database, the registry **and** the Foundry token broker | Karavan, its database and the registry |
 | Scripts and docs | all three projects, Foundry, the fake Foundry, oracle, parity check, mutation experiment | the consumer's only |
-| Kafka reading and commit (branch `kamelets`) | In route 1, with a commit step 1.3 and another in route 3 (3.3) | In the Kamelet `kafka-at-least-once-source` for a record the route finishes normally; route 3 commits its own offset (step 3.5), because a handled error stops the route that called route 1 and the Kamelet's commit never runs for a dead letter |
+| Kafka reading and commit (branch `kamelets`) | In route 1, with a commit step 1.3 and another in route 3 (3.3) | In the Kamelet `kafka-at-least-once-source` for a record the route finishes normally; the shared Kamelet `dead-letter-sink` commits for a dead letter, because a handled error stops the route that called route 1 and the source Kamelet's commit never runs for it |
 
 Not copied on purpose: `parity-check.sh` (compared the Camel tables with the Go consumer's, and emptied the Camel ones) and the mutation experiment
 (its consumer mutations are in the original repository's `tests/mutation/`).
@@ -33,7 +33,7 @@ Not copied on purpose: `parity-check.sh` (compared the Camel tables with the Go 
 |---|---|
 | GitHub | `m-almeida-p/ms-ml-conv-history-consumer`, branch `main`. The consumer starts from the Kamelet `kamelets/kafka-at-least-once-source.kamelet.yaml`, which reads the topic and commits the offset after the route returns normally (a dead letter commits in route 3). The branch `kamelets` is the same code, kept for reference |
 | Backup | The tag **`backup-before-kamelets`** is the previous version, where the consumer reads Kafka itself with a commit step in routes 1 and 3 |
-| Tests | Same behaviour as the backup: all 46 system checks and the 95 JUnit tests pass ([testing.md](testing.md#last-run)) |
+| Tests | Same behaviour as the backup: all 46 system checks and the 90 JUnit tests pass ([testing.md](testing.md#last-run)) |
 | Run under Karavan | **Verified 2026-11-19.** Karavan copied the Kamelet into the container by itself, the routes started (`total:3 kamelets:1`), the consumer joined its own group and replayed the topic: 119 duplicates, none stored, lag 0, the tables unchanged, the 2 known unframed test records dead-lettered. It runs on 8087 next to the other stack's consumer on 8081 |
 | Karavan | `consumer-karavan` on `http://localhost:9997`, reading this repository (branch `main`) with the same token as the other stack |
 

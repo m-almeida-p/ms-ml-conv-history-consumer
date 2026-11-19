@@ -57,13 +57,14 @@ class StoreRouteTest {
         main.bind("pgDataSource", db);
         main.bind("storeOutcome", new StoreOutcome());
         main.bind("storeRefusal", new StoreRefusal());
-        main.bind("deadLetterRecord", new DeadLetterRecord());
         main.bind("decoder", decoder);
         main.addInitialProperty("app.schema.registryUrl", System.getenv().getOrDefault("REGISTRY_URL", "http://schema-registry:8081"));
         main.addInitialProperty("app.schema.allowedIds", "2");
         main.addInitialProperty("app.kafka.groupId", "jt-service");
         main.addInitialProperty("app.unexpected.maxRetries", "3");
         main.addInitialProperty("app.schema.requireFraming", "true");
+        // The shared Kamelets, as Karavan copies them into a run.
+        main.addInitialProperty("camel.component.kamelet.location", "file:../../../kamelets");
         main.configure().withRoutesIncludePattern("file:../../../ms-ml-conv-history-consumer/store-conversation-history.camel.yaml,file:../../../ms-ml-conv-history-consumer/handle-errors-and-dead-letters.camel.yaml");
         main.start();
         template = main.getCamelContext().createProducerTemplate();
@@ -132,6 +133,8 @@ class StoreRouteTest {
         lastValue = value;
         Exchange exchange = main.getCamelContext().getEndpoint("direct:store").createExchange();
         exchange.getMessage().setBody(value);
+        // What the kafka-at-least-once-source Kamelet does before it calls the route: keep the original value.
+        exchange.setProperty("originalValue", value);
         exchange.getMessage().setHeader("CamelKafkaTopic", "jt-topic");
         exchange.getMessage().setHeader("CamelKafkaPartition", 0);
         exchange.getMessage().setHeader("CamelKafkaOffset", (long) offset.incrementAndGet());
@@ -383,6 +386,7 @@ class StoreRouteTest {
     private Exchange deadLetter(byte[] key, byte[] value, int partition, long recordOffset, Throwable caught, int redeliveries) {
         Exchange exchange = main.getCamelContext().getEndpoint("direct:deadLetter").createExchange();
         exchange.getMessage().setBody(value);
+        exchange.setProperty("originalValue", value);
         exchange.getMessage().setHeader("CamelKafkaTopic", "jt-topic");
         exchange.getMessage().setHeader("CamelKafkaPartition", partition);
         exchange.getMessage().setHeader("CamelKafkaOffset", recordOffset);

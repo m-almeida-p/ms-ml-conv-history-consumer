@@ -104,7 +104,7 @@ flowchart LR
     r2 -- "stored or duplicate" --> r13
     r11 -. "poison record" .-> r3
     r2 -. "poison or unexpected" .-> r3
-    r3 -- "3.5 commits its own offset" --> r13
+    r3 -- "sink commits its offset" --> r13
 ```
 
 *In words:* route 1 decodes and validates a record (1.1). A tombstone is skipped; any other record goes to route 2 to be
@@ -150,11 +150,9 @@ the outcome and control returns to route 1.
 
 | Step | What | Why |
 |---|---|---|
-| 3.1 Name the reason if none | An unexpected error gets its exception class (`field=`) and message (`detail=`). | Poison and refused records already have theirs. |
-| 3.2 Prepare the row | Builds the row's parameters from what the decoder kept: the original key, value and Kafka headers, the coordinates, the reason, the attempt. Texts lose any NUL. | The row is always accepted. |
-| 3.3 Write the dead letter | One `INSERT` into `dead_letter.dead_letters`, `ON CONFLICT DO NOTHING`. | The record is kept as it came and can be replayed; a retry is harmless; if the insert fails the record is read again. |
-| 3.4 Write the dead-letter log | One `ERROR` line on logger `dlq`: reason, field, topic, partition, offset, key, detail. | A line to grep. The record is in the table, not here. |
-| 3.5 Commit the offset | `${header.CamelKafkaManualCommit.commit()}`, after the row is written. | A handled error stops the route that called route 1, so the Kamelet's commit does not run for a dead letter; without this the offset never moved. |
+| 3.1 Keep it | One call to the shared Kamelet [`dead-letter-sink`](conv-history-consumer.md#the-dead-letter-table) with the service (this consumer's group) and the retries. | The same for every consumer, so route 3 is not copied. |
+
+Inside the sink, in order: **name the reason** if none (an unexpected error gets its exception class and message), **prepare the row** (a Groovy script: the original key, value and Kafka headers, the coordinates, the attempt; texts lose any NUL), **write the dead letter** (one `INSERT` into `dead_letter.dead_letters`, `ON CONFLICT DO NOTHING`; if it fails the record is read again), **write the log line** (one `ERROR` on logger `dlq`, without the record) and **commit the offset** (a handled error stops the route that called route 1, so the source Kamelet's commit does not run for a dead letter; without this the offset never moved).
 
 ---
 
@@ -178,8 +176,8 @@ sequenceDiagram
         S-->>R: stored or duplicate
         R-->>K: route 1 returns, so the Kamelet commits the offset
     else a poison record
-        R->>L: 3.3 write the dead letter
-        L-->>K: 3.5 route 3 commits the offset itself
+        R->>L: 3.1 dead-letter-sink writes the dead letter
+        L-->>K: the sink commits the offset itself
     end
 ```
 
@@ -202,7 +200,7 @@ Reading the Designer? Find the step; the **Docs:** line of its note points to th
 | 2.1 Write | One statement, one transaction | [The store](conv-history-consumer.md#the-store-one-statement-one-transaction) |
 | 2.2 Decide the outcome | stored, duplicate or conflict | [What happens to each kind of record](conv-history-consumer.md#what-happens-to-each-kind-of-record) |
 | Error rules (`errorRules`) | Poison, refused, dependency down, unexpected | same |
-| 3.1 to 3.5 | Name the reason, prepare the row, write the dead letter, write the log, commit | [The dead-letter table](conv-history-consumer.md#the-dead-letter-table) |
+| 3.1 | Keep it: the dead-letter-sink Kamelet | [The dead-letter table](conv-history-consumer.md#the-dead-letter-table) |
 | Any pattern name | What the pattern is | [Pattern map](#pattern-map) |
 
 ## Pattern map
@@ -248,7 +246,7 @@ topic and **commits the offset only when the route that uses it has finished wit
 | | In the Kamelet (shared by every consumer) | In the project (one per consumer) |
 |---|---|---|
 | Reading | Topic, brokers, group, auto commit off, manual commit, bytes as the body | Which topic and group: three parameters |
-| Committing | After the route returns normally: stored or skipped. If the route retries forever, it never returns and the offset does not move | The dead-letter route commits its own offset (step 3.5): a handled error does not return normally to the Kamelet |
+| Committing | After the route returns normally: stored or skipped. If the route retries forever, it never returns and the offset does not move | Nothing: the dead-letter-sink Kamelet commits for a dead letter, because a handled error does not return normally to the source Kamelet |
 | What the record means | Nothing | The decoder (the event contract), the store route (the SQL), the dead-letter route, the error rules |
 
 How Karavan treats it: a Kamelet kept in Karavan's **Custom Kamelets** project (the `kamelets/` folder of the repository) appears in the

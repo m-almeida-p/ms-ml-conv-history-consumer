@@ -1,0 +1,186 @@
+apiVersion: camel.apache.org/v1
+kind: Kamelet
+metadata:
+  name: dead-letter-sink
+  annotations:
+    camel.apache.org/kamelet.support.level: Preview
+    camel.apache.org/provider: Yape
+    camel.apache.org/kamelet.group: Kafka
+  labels:
+    camel.apache.org/kamelet.type: sink
+spec:
+  definition:
+    title: Dead-letter sink
+    description: >-
+      Keeps a record a consumer can never handle, exactly as Kafka delivered it, in the shared table
+      dead_letter.dead_letters (ms-ml-conv-history-migrations), writes one ERROR line to the log without the record, and
+      commits the record's offset. Call it from the route a consumer sends its refused records to (the target of its
+      onException rules and its Dead Letter Channel). It is the same for every consumer: only the service name differs.
+      It needs a consumer that starts from the kafka-at-least-once-source Kamelet, which keeps the original value in the
+      exchange property originalValue and delivers the key as bytes in the header CamelKafkaKey.
+      What it reads from the exchange: the properties dlqReason, dlqField and dlqDetail (why the record was refused; with
+      no dlqReason the record is an unexpected error and is named after the exception), the Kafka headers
+      (CamelKafkaTopic, CamelKafkaPartition, CamelKafkaOffset, CamelKafkaTimestamp, CamelKafkaKey) and the Kafka record
+      headers (the headers whose value is bytes).
+      Why it commits: a route that handles an error itself (onException with handled) does not return normally to the
+      source Kamelet, so the source's own commit never runs for it. The commit is here, after the row is written, so the
+      offset never moves past a record that was not kept. If the insert fails the route throws and the record is read
+      again; the insert is ON CONFLICT DO NOTHING, so reading it again is harmless.
+      The texts (reason, field, detail) lose any NUL character and are cut to 2000 characters, so the insert cannot fail
+      on the very thing that made the record a dead letter. The record itself is bytes and is stored as it came.
+    required:
+      - service
+    type: object
+    properties:
+      service:
+        title: Service
+        description: >-
+          Who dead-letters the record: the consumer group, such as ms-ml-conv-history-consumer. It is part of the row's unique
+          key, so two consumers of the same topic each keep their own row for the same record.
+        type: string
+      maxRetries:
+        title: Retries of an unexpected error
+        description: >-
+          How many times the consumer's Dead Letter Channel tries an unexpected error again before it sends it here. The row's
+          attempt is this plus one for an unexpected error, and 1 for a record that was refused at once. Pass the same setting
+          the Dead Letter Channel's redelivery policy reads.
+        type: integer
+        default: 3
+      dataSource:
+        title: Data source
+        description: The name of the javax.sql.DataSource bean of the consumer's Postgres, without the leading #.
+        type: string
+        default: pgDataSource
+  types:
+    in:
+      mediaType: application/octet-stream
+  dependencies:
+    - camel:groovy
+    - camel:jackson
+    - camel:sql
+  template:
+    from:
+      id: fromSource
+      uri: kamelet:source
+      steps:
+        - setProperty:
+            id: setService
+            name: dlqService
+            expression:
+              constant:
+                expression: "{{service}}"
+        - setProperty:
+            id: setMaxRetries
+            name: dlqMaxRetries
+            expression:
+              constant:
+                expression: "{{maxRetries}}"
+        - script:
+            id: prepareRow
+            description: Prepare the row
+            expression:
+              groovy:
+                expression: |
+                  import java.nio.ByteBuffer
+                  import java.nio.charset.CharacterCodingException
+                  import java.nio.charset.CodingErrorAction
+                  import java.nio.charset.StandardCharsets
+                  import org.apache.camel.Exchange
+
+                  // A NUL is removed (a text column refuses it) and the text is cut, so the insert cannot fail on the very thing
+                  // that made the record a dead letter.
+                  def text = { String s ->
+                    if (s == null) return null
+                    String clean = s.replace('\u0000', '')
+                    clean.length() <= 2000 ? clean : clean.substring(0, 2000)
+                  }
+                  // The record as readable text for the log: control characters (the Schema Registry header's zero bytes) as \xNN.
+                  def printable = { byte[] v ->
+                    if (v == null) return ''
+                    String s = new String(v, StandardCharsets.UTF_8)
+                    StringBuilder out = new StringBuilder()
+                    for (int i = 0; i < s.length(); i++) {
+                      if (out.length() >= 16384) { out.append('...(truncated, ' + s.length() + ' chars)'); break }
+                      char c = s.charAt(i)
+                      if ((c < 0x20 && c != 9 && c != 10) || c == 0x7f) out.append(String.format('\\x%02x', (int) c)) else out.append(c)
+                    }
+                    out.toString()
+                  }
+                  // A header value that is not text without a NUL is kept as base64: jsonb cannot hold a NUL.
+                  def headerText = { byte[] b ->
+                    try {
+                      String t = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                              .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(b)).toString()
+                      if (t.indexOf(0) < 0) return t
+                    } catch (CharacterCodingException e) {
+                      // not UTF-8: base64 below
+                    }
+                    'base64:' + Base64.encoder.encodeToString(b)
+                  }
+
+                  def msg = exchange.getMessage()
+                  Throwable caught = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Throwable)
+
+                  // Why. A refused record already has its reason; an unexpected error is named after its exception.
+                  boolean unexpected = exchange.getProperty('dlqReason') == null
+                  String reason = unexpected ? 'unexpected' : text(exchange.getProperty('dlqReason', String))
+                  String field = unexpected ? text(caught == null ? null : caught.class.simpleName) : text(exchange.getProperty('dlqField', String))
+                  String detail = unexpected ? text(caught == null ? null : caught.message) : text(exchange.getProperty('dlqDetail', String))
+                  exchange.setProperty('dlqReason', reason)
+                  exchange.setProperty('dlqField', field)
+                  exchange.setProperty('dlqDetail', detail)
+
+                  // The key, as bytes (a text key is its UTF-8 bytes), and the Kafka record headers (the ones whose value is bytes:
+                  // headers a route added are text and are not the record's).
+                  def key = msg.getHeader('CamelKafkaKey')
+                  byte[] keyBytes = key == null ? null : (key instanceof byte[] ? (byte[]) key : key.toString().getBytes(StandardCharsets.UTF_8))
+                  def kafkaHeaders = new LinkedHashMap()
+                  msg.headers.each { k, v -> if (!k.startsWith('Camel') && v instanceof byte[]) kafkaHeaders[k] = headerText((byte[]) v) }
+                  exchange.setProperty('dlqKeyText', printable(keyBytes))
+
+                  Long timestamp = msg.getHeader('CamelKafkaTimestamp', Long)
+                  def row = new LinkedHashMap()
+                  row.service = exchange.getProperty('dlqService', String)
+                  row.topic = msg.getHeader('CamelKafkaTopic', String)
+                  row.partition = msg.getHeader('CamelKafkaPartition', Integer)
+                  row.offset = msg.getHeader('CamelKafkaOffset', Long)
+                  row.timestamp = timestamp == null ? null : new java.sql.Timestamp(timestamp)
+                  row.key = keyBytes
+                  row.value = exchange.getProperty('originalValue', byte[])
+                  row.headers = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(kafkaHeaders)
+                  row.reason = reason
+                  row.field = field
+                  row.detail = detail
+                  // Only an unexpected error has a class worth keeping; for a refused record it would always be the same.
+                  row.exceptionClass = unexpected && caught != null ? text(caught.class.name) : null
+                  // An unexpected error was tried again maxRetries times before it got here (Camel does not leave its redelivery
+                  // counter on the exchange at this point); a refused record is not retried.
+                  row.attempt = unexpected ? Integer.parseInt(exchange.getProperty('dlqMaxRetries', String)) + 1 : 1
+                  msg.setBody(row)
+        - to:
+            id: writeDeadLetter
+            description: Write the dead letter
+            uri: sql
+            parameters:
+              dataSource: "#{{dataSource}}"
+              query: >-
+                INSERT INTO dead_letter.dead_letters
+                  (service, source_topic, source_partition, source_offset, source_timestamp, record_key, record_value, headers,
+                   reason, field, detail, exception_class, attempt)
+                VALUES
+                  (:#service, :#topic, :#partition, :#offset, CAST(:#timestamp AS timestamptz), CAST(:#key AS bytea),
+                   CAST(:#value AS bytea), CAST(:#headers AS jsonb), :#reason, CAST(:#field AS text), CAST(:#detail AS text),
+                   CAST(:#exceptionClass AS text), :#attempt)
+                ON CONFLICT (service, source_topic, source_partition, source_offset) DO NOTHING
+        - log:
+            id: logDeadLetter
+            description: Write the dead-letter log
+            logName: dlq
+            loggingLevel: ERROR
+            message: "DLQ reason=${exchangeProperty.dlqReason} field=${exchangeProperty.dlqField} topic=${header.CamelKafkaTopic} partition=${header.CamelKafkaPartition} offset=${header.CamelKafkaOffset} key=${exchangeProperty.dlqKeyText} detail=${exchangeProperty.dlqDetail}"
+        - script:
+            id: commitDeadLetter
+            description: Commit the offset
+            expression:
+              simple:
+                expression: "${header.CamelKafkaManualCommit.commit()}"
