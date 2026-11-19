@@ -7,7 +7,7 @@
     from:
       id: fromEventsTopic
       description: Topic (Kamelet source)
-      note: "Reads {{app.topic}} as group {{app.kafka.groupId}} with the Kamelet kafka-at-least-once-source, which also commits the offset when this route is done with the record. Docs: conv-history-consumer.md > Settings."
+      note: "Reads {{app.topic}} as group {{app.kafka.groupId}} with the Kamelet kafka-at-least-once-source, which also commits the offset when this route returns normally (a dead letter commits in route 3, step 3.5). Docs: conv-history-consumer.md > Settings."
       uri: kamelet:kafka-at-least-once-source
       parameters:
         topic: "{{app.topic}}"

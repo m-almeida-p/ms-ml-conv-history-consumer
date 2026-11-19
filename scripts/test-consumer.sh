@@ -229,7 +229,9 @@ check "the record itself is not in the log, only in the table" "0" "$(grep -c 'b
 rm -f "/tmp/camel-test-dlq.$$"
 
 echo "🔎  offsets"
-lag="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP}" 2>/dev/null | awk -v t="${TOPIC}" '$2==t && $6 ~ /^[0-9]+$/ {s+=$6} END {print s+0}')"
+# Lag is the log end minus the committed offset. A partition that was never committed shows '-' in both columns, and counts as lag: the first
+# version of this check skipped those rows and so could not see a record whose offset was never committed.
+lag="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP}" 2>/dev/null | awk -v t="${TOPIC}" '$2==t {c=($4 ~ /^[0-9]+$/)?$4:0; e=($5 ~ /^[0-9]+$/)?$5:0; s+=e-c} END {print s+0}')"
 check "no lag: every offset was committed, none blocked" "0" "${lag}"
 
 # ---------------------------------------------------------------------------------------------------------
@@ -253,6 +255,9 @@ frame = lambda sid, b: b"\x00" + sid.to_bytes(4, "big") + b
 # dead-letter insert meet the outage too.
 sys.stdout.buffer.write(frame(1, b'{"conversation_id":"t-out-poison"}') + b"\t" + b"this record has no Schema Registry header" + b"\n")
 sys.stdout.buffer.write(frame(1, b'{"conversation_id":"t-out"}') + b"\t" + frame(2, json.dumps(event).encode()) + b"\n")
+# And a refused record LAST: nothing follows it, so its offset moves only if the dead-letter route commits it itself (a handled error stops
+# the route that called route 1, so the Kamelet's own commit does not run for it). The lag check after the recovery depends on it.
+sys.stdout.buffer.write(frame(1, b'{"conversation_id":"t-out-poison-last"}') + b"\t" + b"this refused record is the last one on its partition" + b"\n")
 PY
 
 "${REPO_DIR}/scripts/devmode-local.sh" "${PROJECT}" "APP_TOPIC=${TOPIC2}" "APP_KAFKA_GROUPID=${GROUP2}" \
@@ -281,9 +286,9 @@ log_has 'Event stored conversation=t-out' && recovered=1 || recovered=0
 check "the record is stored once the database is back" "1" "${recovered}"
 check "and it is in the inbox" "1" "$(sql "SELECT count(*) FROM history.conversation_inbox WHERE conversation_id='t-out'")"
 sleep 3
-lag="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP3}" 2>/dev/null | awk -v t="${TOPIC2}" '$2==t && $6 ~ /^[0-9]+$/ {s+=$6} END {print s+0}')"
+lag="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP3}" 2>/dev/null | awk -v t="${TOPIC2}" '$2==t {c=($4 ~ /^[0-9]+$/)?$4:0; e=($5 ~ /^[0-9]+$/)?$5:0; s+=e-c} END {print s+0}')"
 check "and its offset is then committed" "0" "${lag}"
-check "the refused record that met the outage is in the dead-letter table once the database is back, once" "no-schema-header=1" \
+check "both refused records are in the dead-letter table once the database is back, once each (the last one needs its own commit)" "no-schema-header=2" \
   "$(sql "SELECT reason||'='||count(*) FROM dead_letter.dead_letters WHERE service='${GROUP3}' GROUP BY reason")"
 "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --delete --topic "${TOPIC2}" >/dev/null 2>&1 || true
 for g in "${GROUP2}" "${GROUP3}"; do "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --delete --group "$g" >/dev/null 2>&1 || true; done
@@ -329,7 +334,7 @@ check "each row holds the original record: the Schema Registry header, then the 
   "$(sql "SELECT count(*) ${DL4} AND encode(substring(record_value from 1 for 5), 'hex')='0000000002' AND convert_from(substring(record_value from 6), 'UTF8') LIKE '%t-unx%'")"
 rm -f "/tmp/camel-test-unx.$$"
 sleep 3
-lag="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP4}" 2>/dev/null | awk -v t="${TOPIC4}" '$2==t && $6 ~ /^[0-9]+$/ {s+=$6} END {print s+0}')"
+lag="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP4}" 2>/dev/null | awk -v t="${TOPIC4}" '$2==t {c=($4 ~ /^[0-9]+$/)?$4:0; e=($5 ~ /^[0-9]+$/)?$5:0; s+=e-c} END {print s+0}')"
 check "their offsets were committed: a bug does not hang the partition" "0" "${lag}"
 check "nothing was written" "0" "$(sql "SELECT count(*) FROM history.conversation_inbox WHERE conversation_id='t-unx'")"
 "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --delete --topic "${TOPIC4}" >/dev/null 2>&1 || true

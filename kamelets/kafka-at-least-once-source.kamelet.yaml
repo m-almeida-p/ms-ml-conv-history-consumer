@@ -13,12 +13,14 @@ spec:
     title: Kafka at-least-once source
     description: >-
       Reads one record at a time from a Kafka topic and commits its offset only after the route that
-      uses this source has finished with it (stored, skipped or dead-lettered), so a record that was
-      not handled is never covered by a later commit. If the route retries forever (a dependency is
+      uses this source has returned normally (stored or skipped), so a record that was not handled is
+      never covered by a later commit. A route that handles an error itself (onException with handled)
+      does not return normally to this source, so the commit below never runs for it: that route must
+      commit the offset itself, after it has kept the record. If the route retries forever (a dependency is
       down), the offset does not move. The message body is the raw record (bytes), and so is the key
       (the header CamelKafkaKey); the Kafka headers are kept. Nothing is decoded here, so a consumer can store
-      the record exactly as it came. Auto commit is off; the commit is done here, so a route that uses this
-      source needs no commit step of its own.
+      the record exactly as it came. Auto commit is off; the commit is done here for a record the route finishes
+      normally.
     required:
       - topic
       - brokers

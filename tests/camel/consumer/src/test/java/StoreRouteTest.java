@@ -41,6 +41,8 @@ class StoreRouteTest {
     private static ProducerTemplate template;
     private static ConversationEventDecoder decoder;
     private final AtomicInteger commits = new AtomicInteger();
+    /** How many dead-letter rows of this service existed at the moment of the commit: the offset must move only after the row is written. */
+    private volatile String rowsAtCommit;
     private final AtomicInteger offset = new AtomicInteger();
     private byte[] lastValue;
 
@@ -135,10 +137,26 @@ class StoreRouteTest {
         exchange.getMessage().setHeader("CamelKafkaOffset", (long) offset.incrementAndGet());
         exchange.getMessage().setHeader(KafkaConstants.MANUAL_COMMIT, Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[] {KafkaManualCommit.class},
                 (proxy, method, args) -> {
-                    if (method.getName().equals("commit")) {
-                        commits.incrementAndGet();
+                    // Camel calls hashCode() on the header's object before it calls commit(); a proxy that answers null to it fails with an NPE.
+                    switch (method.getName()) {
+                        case "commit" -> {
+                            commits.incrementAndGet();
+                            rowsAtCommit = one("SELECT count(*) FROM dead_letter.dead_letters WHERE service = 'jt-service'");
+                            return null;
+                        }
+                        case "hashCode" -> {
+                            return System.identityHashCode(proxy);
+                        }
+                        case "equals" -> {
+                            return proxy == args[0];
+                        }
+                        case "toString" -> {
+                            return "KafkaManualCommit(test)";
+                        }
+                        default -> {
+                            return null;
+                        }
                     }
-                    return null;
                 }));
         decoder.decode(exchange);
         return template.send("direct:store", exchange);
@@ -181,7 +199,7 @@ class StoreRouteTest {
 
         assertEquals("store-rejected", clash.getProperty("dlqReason"));
         assertEquals("stream-position", clash.getProperty("dlqField"));
-        assertEquals(0, commits.get(), "route 3 does not commit either: the Kamelet source does, when the route returns (test-consumer.sh checks there is no lag)");
+        assertEquals(1, commits.get(), "route 3 commits: a handled error stops the route that called route 1, so the Kamelet's own commit never runs for a dead letter");
         assertEquals("original", one("SELECT text FROM conversation_messages WHERE conversation_id = 'jt-3'"));
     }
 
@@ -253,7 +271,8 @@ class StoreRouteTest {
 
         assertEquals("store-rejected", refused.getProperty("dlqReason"));
         assertTrue(String.valueOf(refused.getProperty("dlqField")).startsWith("sqlstate-22"), String.valueOf(refused.getProperty("dlqField")));
-        assertEquals(0, commits.get(), "dead-lettered, and no route commits: the Kamelet source does, so a refused message cannot block its partition");
+        assertEquals(1, commits.get(), "dead-lettered and committed, so a refused message cannot block its partition (exception on the exchange: " + refused.getException() + ")");
+        assertEquals("1", rowsAtCommit, "the offset moves only after the dead-letter row is written");
         assertEquals(0, count("conversation_inbox", "jt-9"));
         assertEquals(0, count("conversation_messages", "jt-9"));
         assertEquals(0, count("conversation_summaries", "jt-9"));
@@ -264,7 +283,7 @@ class StoreRouteTest {
         Exchange refused = receive(event("jt-10", 1, "ToolCallSummary", "{\"tool\":\"a\\u0000b\"}"));
 
         assertEquals("store-rejected", refused.getProperty("dlqReason"));
-        assertEquals(0, commits.get(), "no route commits");
+        assertEquals(1, commits.get(), "dead-lettered and committed");
         assertEquals(0, count("conversation_inbox", "jt-10"));
     }
 

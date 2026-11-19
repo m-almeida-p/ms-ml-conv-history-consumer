@@ -20,7 +20,7 @@ each step:
 |---|---|
 | **1 Receive** | 1.1 Decode and validate the record (schema id, registry schema, contract, projection) → 1.2 Route by kind of record (a tombstone is skipped, any other record goes to route 2) The offset is committed by the Kamelet source when route 1 returns, not by a step of its own |
 | **2 Store** | 2.1 Write inbox, message and summary with one statement in one transaction → 2.2 Decide stored, duplicate or conflict → 2.3 Log the outcome |
-| **3 Dead-letter** | 3.1 Name the reason if no rule did → 3.2 Prepare the row → 3.3 Write the dead letter → 3.4 Write the log line. Its offset is committed by the Kamelet source, as for any record |
+| **3 Dead-letter** | 3.1 Name the reason if no rule did → 3.2 Prepare the row → 3.3 Write the dead letter → 3.4 Write the log line → 3.5 Commit the offset. It commits its own offset: a handled error stops the route that called route 1, so the Kamelet's commit does not run for it |
 
 Records that fail validation or that the store refuses go to route 3. A database or registry outage is retried
 forever and the offset does not move. Anything unexpected is retried 3 times, then goes to route 3 as `reason=unexpected`.
@@ -51,7 +51,7 @@ registers itself with `@BindToRegistry`, so the route refers to them by name (`d
 
 The route does not read Kafka itself: it starts from the Kamelet **`kafka-at-least-once-source`**, which lives in the repository's
 [`kamelets/`](../kamelets) folder (Karavan's *Custom Kamelets* project), not in this project's folder. It reads the topic with auto commit off,
-hands each record to route 1, and **commits the offset when route 1 returns** (stored, skipped or dead-lettered). If the route retries forever,
+hands each record to route 1, and **commits the offset when route 1 returns normally** (stored or skipped); a dead letter commits in route 3 (step 3.5). If the route retries forever,
 it never returns and the offset does not move. [Why and how to reuse it](kamelets.md).
 
 ## Settings
@@ -160,7 +160,7 @@ because the line keeps the body, the records can be replayed after the fix.
 
 ## The dead-letter table
 
-*Designer: route 3, steps 3.1 to 3.4.*
+*Designer: route 3, steps 3.1 to 3.5.*
 
 A record the consumer refuses for good is written to **`dead_letter.dead_letters`**, a table shared by every consumer
 (`ms-ml-conv-history-migrations`, folder `shared/dead_letter`; its README has the columns, the replay and the retention). One row per
@@ -176,7 +176,7 @@ source record and service, the record **exactly as Kafka delivered it**:
 | `status` | Starts `open`. Whoever replays or discards the record sets `replayed` or `discarded` and `resolved_at`. |
 
 **Steps.** 3.1 names the reason if none did (an unexpected error). 3.2 (`DeadLetterRecord.java`) builds the row's parameters. 3.3 writes the
-row with `ON CONFLICT DO NOTHING`. 3.4 writes the log line. The Kamelet commits the offset after that, when route 1 returns.
+row with `ON CONFLICT DO NOTHING`. 3.4 writes the log line. 3.5 commits the offset: a handled error stops the route that called route 1, so the Kamelet's own commit never runs for a dead letter.
 
 **The record is never lost.** The offset moves only after the row is written. If the insert cannot be done, the route throws and the record
 is read again: a database outage is retried in place (tested: a refused record that meets an outage waits, and is written once once the

@@ -39,7 +39,7 @@ One Maven module, run in a Maven container on the cluster network (`maven:3.9-ec
 | `DeadLetterRecordTest` | The parameters of the dead-letter row, with no database: coordinates, the bytes as they came, NULs removed from the texts, the detail cut, the attempt (1, or the retries plus 1 for an unexpected error), the exception class only for an unexpected error |
 | `StoreRouteTest` | Routes 2 and 3 with their real error rules on the cluster's Postgres: stored, duplicate, conflict, a NUL (refused for good), a million characters, 16 threads on one event, 30 on one conversation; and the dead-letter table: a refused record stored byte for byte with its coordinates, the same record twice leaving one row, a record the store refuses keeping the original bytes and not the decoded event, an unexpected error with its class and attempts |
 
-**What the JUnit tests do not cover:** route 1 and the Kamelet (the Kafka subscription and the offset commit). `test-consumer.sh` does: it runs the project with its Kamelet, as Karavan does. The route tests assert that routes 2 and 3 do **not** commit, because the Kamelet does.
+**What the JUnit tests do not cover:** route 1 and the Kamelet (the Kafka subscription and the offset commit). `test-consumer.sh` does: it runs the project with its Kamelet, as Karavan does. The route tests assert that route 2 does **not** commit (the Kamelet does) and that route 3 commits exactly once, and only after its dead-letter row exists (a handled error stops the route that called route 1, so the Kamelet's commit does not run for a dead letter).
 
 ## `test-consumer.sh`
 
@@ -58,8 +58,14 @@ retries with its class and four attempts, even when the store's schema is missin
 
 ## Last run
 
-2026-11-19, with the dead letters in `dead_letter.dead_letters` (the change of this section): **all 3 suites green**: docs check, **95 JUnit tests** and **46 system checks**, no test row
-left in any table. The two things worth knowing: a refused record that meets a database outage is retried in place and written exactly once when the database returns, with
+2026-11-19, with the dead letters in `dead_letter.dead_letters`: **all 3 suites green**: docs check, **95 JUnit tests** and **46 system checks**, no test row
+left in any table.
+
+**A defect the checks could not see, found by running it under Karavan:** a dead-lettered record's offset was never committed (a handled error stops the route that called route 1,
+so the Kamelet's commit does not run). Every lag check of `test-consumer.sh` missed it, for two reasons: records that were stored followed the dead letters and their later commit
+covered the earlier offsets, and the `awk` kept only rows whose lag was a number, while a partition that was never committed shows `-`. Now: route 3 commits (step 3.5); the lag
+is the log end minus the committed offset (a never-committed partition counts); the outage phase ends with a refused record, alone at the end of its partition. Without step 3.5 the
+checks fail (15, 1 and 2 offsets uncommitted); with it they pass. The two things worth knowing: a refused record that meets a database outage is retried in place and written exactly once when the database returns, with
 its offset committed; and the redelivery counter was **not** usable when the Dead Letter Channel calls route 3: a record Camel had tried 4 times was recorded as attempt 1. So the
 attempt of an unexpected error is `app.unexpected.maxRetries` + 1, from the setting the retry policy reads, and the system test checks both the 4 failed deliveries and `attempt = 4`.
 
@@ -74,7 +80,7 @@ The new Karavan stack was started next to the other one (UI 9997 and 9998 both a
 
 Branch `kamelets` (the consumer starts from the Kamelet `kafka-at-least-once-source`), 2026-11-19: **all 3 suites green again**: docs check, 80 JUnit tests,
 and all 37 system checks of `test-consumer.sh`, including the commit behaviour (an outage leaves the offset uncommitted, recovery commits it, poison and
-unexpected records are committed). Route 3 lost its commit step, so the JUnit assertions that counted commits there now assert zero.
+unexpected records are committed). Route 3 had lost its commit step in this change, and the checks could not see it (see the 2026-11-19 entry above): it has one again.
 
 **Under Karavan (Run in the UI), branch `kamelets`:** verified. The Karavan Designer draws the Kamelet as a typed source (Topic, Brokers, Consumer group, Where to start); Run
 copies `kafka-at-least-once-source.kamelet.yaml` into the container; the consumer joins its group, reads the 119 existing events as duplicates, ends with lag 0 and leaves

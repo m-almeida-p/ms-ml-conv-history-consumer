@@ -167,3 +167,10 @@
             logName: dlq
             loggingLevel: ERROR
             message: "DLQ reason=${exchangeProperty.dlqReason} field=${exchangeProperty.dlqField} topic=${header.CamelKafkaTopic} partition=${header.CamelKafkaPartition} offset=${header.CamelKafkaOffset} key=${exchangeProperty.rawKey} detail=${exchangeProperty.dlqDetail}"
+        - script:
+            id: commitDeadLetter
+            description: 3.5 Commit the offset
+            note: "A handled error stops the route that called route 1, so the Kamelet source's own commit never runs for a dead letter. The offset moves here, after the row is written. Docs: conv-history-consumer.md > The dead-letter table."
+            expression:
+              simple:
+                expression: "${header.CamelKafkaManualCommit.commit()}"

@@ -29,18 +29,18 @@ sequenceDiagram
 ```
 
 *In words:* the Kamelet reads one record at a time with auto commit **off**, hands it to your route, and commits the offset **only when your
-route has finished with it**. A record your route did not finish is never covered by a later commit: this is at-least-once delivery, so
+route has returned normally**. A record your route did not finish is never covered by a later commit: this is at-least-once delivery, so
 your steps should tolerate seeing a record twice (the store here does: the inbox refuses a duplicate).
 
 | Your route | What the Kamelet does |
 |---|---|
 | Finishes normally | Commits the offset |
-| Handles the error itself (`onException` with `handled`, for example a dead-letter route) and finishes | Commits the offset |
+| Handles the error itself (`onException` with `handled`, for example a dead-letter route) | **Does not commit.** A handled error stops the route that called yours, so the Kamelet's commit step never runs. **Your dead-letter route must commit the offset itself**, after it has kept the record (this project: step 3.5). Measured: without it, the offset of a dead-lettered record never moved (15 uncommitted offsets in one run), and a record dead-lettered by the Dead Letter Channel did not commit either |
 | Retries forever inside a step (a dependency is down) | Never returns, so the offset does not move; nothing is skipped |
 | **Throws and nothing handles it** | **Does not commit and reads the same record again, over and over; every record behind it waits.** Measured: three deliveries of the failed record in seven seconds, offset stuck at it, the next record never delivered |
 
 The last row is the one to remember: **every consumer must decide what a bad record becomes.** This project's `errorRules` and route 3
-(a dead-letter table and a log line) do that; a consumer without such a rule blocks its partition on the first record it cannot handle.
+(a dead-letter table, a log line and a commit) do that; a consumer without such a rule blocks its partition on the first record it cannot handle.
 
 ## Parameters
 
@@ -131,8 +131,8 @@ The log step is where a consumer's own work goes. This project's consumer replac
 1. **A decoder** (a bean) for its own record format and contract: here `ConversationEventDecoder.java`, step 1.1.
 2. **A store route** for its own tables, called with `direct:`: here `store-conversation-history.camel.yaml`.
 3. **Error rules and a dead-letter route**: here `handle-errors-and-dead-letters.camel.yaml`. The route references them with
-   `routeConfigurationId: errorRules`. A record the consumer can never handle must end as *handled*, so the Kamelet commits and the
-   partition moves on.
+   `routeConfigurationId: errorRules`. A record the consumer can never handle must end as *handled*, and the route that handles it must **commit the
+   offset itself** (`${header.CamelKafkaManualCommit.commit()}`, step 3.5) after keeping the record: the Kamelet's commit does not run for a handled error.
 
 Copy the project folder `ms-ml-conv-history-consumer/` as the starting point, rename it, change the three `app.*` settings, the container
 name and the port, and replace the decoder and the store. Route 1 and the Kamelet stay as they are.
