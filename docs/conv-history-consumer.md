@@ -1,11 +1,11 @@
-# conv-history-consumer
+# ms-ml-conv-history-consumer
 
 A Camel Kafka consumer, built in Karavan, that **builds the conversation history** from the events topic: the
 same three tables, with the same rules, as the reference service
 [`ms-ml-conv-history-bs`](../../ms-ml-conv-history-bs). It also enforces the Kafka schema and writes every
 poison message to a dead-letter log.
 
-Project folder: [`conv-history-consumer/`](../conv-history-consumer)
+Project folder: [`ms-ml-conv-history-consumer/`](../ms-ml-conv-history-consumer)
 
 ## What it does
 
@@ -64,7 +64,7 @@ In `application.properties`. Any `app.*` value can be overridden by an environme
 | `app.schema.requireFraming` | `true` | `false` also accepts plain JSON, as the original does. |
 | `app.db.url` / `app.db.user` | `jdbc:postgresql://db:5432/postgres?currentSchema=camel_history` / `postgres` | Target. The cluster trusts local connections: no password. |
 
-The project's port is `8081` on the host (its `docker-compose.yaml`: Karavan reads it, and it must be plain `host:container`).
+The project's port is `8087` on the host (the consumer of `ms-ml-camel-conv-history-bs` has `8081`) (its `docker-compose.yaml`: Karavan reads it, and it must be plain `host:container`).
 
 ## Schema assurance
 
@@ -178,9 +178,9 @@ DLQ reason=field-range field=conversation_id topic=yape.public.conversation_even
 Read it:
 
 ```bash
-docker logs conv-history-consumer 2>&1 | grep 'DLQ reason='
+docker logs ms-ml-conv-history-consumer 2>&1 | grep 'DLQ reason='
 # count by reason
-docker logs conv-history-consumer 2>&1 | grep -o 'DLQ reason=[a-z-]*' | sort | uniq -c
+docker logs ms-ml-conv-history-consumer 2>&1 | grep -o 'DLQ reason=[a-z-]*' | sort | uniq -c
 ```
 
 **Replay** after a fix: rewind the group to the offsets in the lines (see the [cheatsheet](cheatsheet.md#consumer-group-offsets)).
@@ -209,12 +209,12 @@ Use these in `${header.<name>}`. The old `kafka.TOPIC` style names do not exist 
 ## Run it
 
 1. Start the cluster and Karavan ([setup guide](karavan-setup.md)); apply the `camel_history` migrations.
-2. In Karavan open `conv-history-consumer` and click **Run at the top right of the page**. (The Run in the Containers tab
+2. In Karavan open `ms-ml-conv-history-consumer` and click **Run at the top right of the page**. (The Run in the Containers tab
    is a different button and does not start DevMode: see [troubleshooting](troubleshooting.md#which-button-does-what).) The first run pulls the DevMode image
    (about 1.5 GB) and downloads the dependencies, so allow a few minutes.
-3. Watch it: Karavan's **Log** tab, or `docker logs -f conv-history-consumer`. A healthy start shows
+3. Watch it: Karavan's **Log** tab, or `docker logs -f ms-ml-conv-history-consumer`. A healthy start shows
    `Routes startup (total:3)` (`routeReceive`, `routeStore`, `routeDeadLetter`), then the group joins and gets all 12 partitions.
-4. `docker ps --filter name=conv-history-consumer` says `(healthy)` after about 25 seconds.
+4. `docker ps --filter name=ms-ml-conv-history-consumer` says `(healthy)` after about 25 seconds.
 
 ## Change it
 
@@ -227,9 +227,9 @@ Karavan stores the files in its database, and DevMode copies them into the conta
 For quick iterations without Karavan, run the same image against the files in this repo:
 
 ```bash
-./scripts/devmode-local.sh conv-history-consumer APP_TOPIC=camel.test.events APP_KAFKA_GROUPID=camel-test
-docker logs -f devmode-local-conv-history-consumer
-./scripts/devmode-local.sh stop conv-history-consumer
+./scripts/devmode-local.sh ms-ml-conv-history-consumer APP_TOPIC=camel.test.events APP_KAFKA_GROUPID=camel-test
+docker logs -f devmode-local-ms-ml-conv-history-consumer
+./scripts/devmode-local.sh stop ms-ml-conv-history-consumer
 ```
 
 ## Test it

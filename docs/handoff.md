@@ -4,7 +4,7 @@ Read this first if you are picking the work up (a person or another agent). Ever
 
 ## What this is
 
-One Apache Camel Karavan project, `conv-history-consumer`, that reads the Kafka topic `yape.public.conversation_events` (the Debezium
+One Apache Camel Karavan project, `ms-ml-conv-history-consumer`, that reads the Kafka topic `yape.public.conversation_events` (the Debezium
 outbox of the agent's event store) and builds the conversation history in the Postgres schema `camel_history`: `conversation_inbox`,
 `conversation_messages` and `conversation_summaries`. It validates each record against the Schema Registry and writes a record it can
 never store to a dead-letter log.
@@ -34,14 +34,14 @@ of [testing.md](testing.md#last-run). There is **no GitHub remote yet**: create 
 ## Is it healthy? (one minute)
 
 ```bash
-docker ps --format '{{.Names}} {{.Status}}' | grep conv-history-consumer     # healthy
+docker ps --format '{{.Names}} {{.Status}}' | grep ms-ml-conv-history-consumer     # healthy
 docker exec yape-kafka kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group ms-ml-conv-history-consumer \
   | awk '$6 ~ /^[0-9]+$/ {l+=$6} END {print "lag", l+0}'                      # 0
-docker logs conv-history-consumer 2>&1 | grep -c 'DLQ reason='               # dead letters so far; see the reasons
+docker logs ms-ml-conv-history-consumer 2>&1 | grep -c 'DLQ reason='               # dead letters so far; see the reasons
 ```
 
 Needs the shared cluster up (`../cluster/scripts/up.sh`, network `yape-local`) and Karavan (`./scripts/up.sh`, UI on
-`http://localhost:9998`, bound to `127.0.0.1`). Start-up from nothing: [karavan-setup.md](karavan-setup.md).
+`http://localhost:9997`, bound to `127.0.0.1`). Start-up from nothing: [karavan-setup.md](karavan-setup.md).
 
 ## The rules the owner set
 
@@ -65,15 +65,15 @@ These stand until the owner changes them.
 3. `python3 -I scripts/check-docs.py` if you touched a route, a step label or a doc: every `Docs:` pointer in a Designer note must
    resolve, every link work, every label fit the Designer (32 characters), every diagram render.
 4. Commit, `./scripts/scan-secrets.sh`, push.
-5. **Deploy to Karavan:** open the project, **Source**, **Pull**, confirm; `docker rm -f conv-history-consumer`; reload the page; press
+5. **Deploy to Karavan:** open the project, **Source**, **Pull**, confirm; `docker rm -f ms-ml-conv-history-consumer`; reload the page; press
    the **top-right Run** (not the one in the Containers tab); wait for `healthy`. A changed `application.properties` or `docker-compose.yaml`
    needs the container recreated, not restarted.
 
-Faster loop without Karavan: `./scripts/devmode-local.sh conv-history-consumer [NAME=value]` runs the project in the same DevMode image
+Faster loop without Karavan: `./scripts/devmode-local.sh ms-ml-conv-history-consumer [NAME=value]` runs the project in the same DevMode image
 on a throwaway topic. The tests use it.
 
 Things that cost time before ([troubleshooting.md](troubleshooting.md) has each with its fix): a stray file in a project folder crashes its
-container (Run copies every file); Karavan's compose parser reads ports as `host:container` and fails on `127.0.0.1:8081:8080`; macOS
+container (Run copies every file); Karavan's compose parser reads ports as `host:container` and fails on `127.0.0.1:8087:8080`; macOS
 `/private/tmp` is invisible to Docker (use `$HOME` or `.devmode-local/`); `docker exec -i` swallows a script's stdin; BSD `sed -i` needs a
 suffix; a Camel `onException` inherits the Dead Letter Channel's exponential back-off unless you switch it off.
 
@@ -82,7 +82,7 @@ suffix; a Camel `onException` inherits the Dead Letter Channel's exponential bac
 | Script | Why |
 |---|---|
 | `scripts/clean.sh` | Removes Karavan's containers **and its database volume** (the project is safe: it is in Git) |
-| `docker rm -f conv-history-consumer` | Normal when redeploying, but the project is down until you press Run again |
+| `docker rm -f ms-ml-conv-history-consumer` | Normal when redeploying, but the project is down until you press Run again |
 
 ## Not ready for production
 
@@ -90,7 +90,7 @@ It is a local PoC and says so. Known, accepted by the owner:
 
 - **Chat text and the account id are written to the dead-letter log** (and so to container logs). The offset is enough to replay; log only
   reason, field, topic, partition and offset if this goes further.
-- **The port 8081 is on all interfaces** (Karavan's compose parser cannot bind it to `127.0.0.1`). Use a host firewall if the network is shared.
+- **The port 8087 is on all interfaces** (Karavan's compose parser cannot bind it to `127.0.0.1`). Use a host firewall if the network is shared.
 - The Camel management port (9876) has `sendEnabled`, `downloadEnabled` and the dev console on. It answers only health today; turn them off
   before sharing the network.
 - The service uses the `postgres` superuser with no password (the cluster's convention).
@@ -103,4 +103,4 @@ It is a local PoC and says so. Known, accepted by the owner:
 | 2 | Rule for Kafka commit failures | `CommitFailedException` and `RebalanceInProgressException` are in no `onException` rule, so one would be dead-lettered as `unexpected`. Add a rule that ignores them (the record redelivers); not done because it could not be provoked to test |
 | 3 | Dependency audit | `postgresql` is declared at 42.7.12; at run time Camel's downloader also puts 42.7.13 on the classpath (which one loads was not determined). HikariCP 6.2.1 and json-schema-validator 1.5.6 have newer **major** versions that were not taken. No scan tool was run |
 | 4 | The owner's migrations `000001`-`000004` | Uncommitted in the producer repo. The tables here depend on them |
-| 5 | The old consumer is still in `ms-ml-camel-conv-history-bs` | Two consumers in two groups write the same tables; the inbox makes that safe, but run one at a time |
+| 5 | The old consumer is still in `ms-ml-camel-conv-history-bs` | Both run at once, on purpose: different ports, names and groups ([table](karavan-setup.md#running-next-to-ms-ml-camel-conv-history-bs)). They write the same three tables, which is safe because the inbox refuses a duplicate, but they do the same work twice |

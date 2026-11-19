@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Unit and route tests of conv-history-consumer, in JUnit 5 and Camel 4.22.2 (the version Karavan's DevMode runs).
+  Unit and route tests of ms-ml-conv-history-consumer, in JUnit 5 and Camel 4.22.2 (the version Karavan's DevMode runs).
 
-  It compiles the project's OWN Java files (../../../conv-history-consumer), not copies, so a test breaks when the code does. Karavan
+  It compiles the project's OWN Java files (../../../ms-ml-conv-history-consumer), not copies, so a test breaks when the code does. Karavan
   compiles those files at start-up with joor; here Maven does, which also checks that they compile as ordinary Java.
   Run it with scripts/test-camel.sh (a Maven container on the cluster network, because the route tests use the cluster's Postgres).
 -->
@@ -10,7 +10,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.apache.camel.karavan.demo</groupId>
-  <artifactId>conv-history-consumer-tests</artifactId>
+  <artifactId>ms-ml-conv-history-consumer-tests</artifactId>
   <version>1</version>
   <packaging>jar</packaging>
 
@@ -36,7 +36,7 @@
   </dependencies>
 
   <build>
-    <sourceDirectory>${project.basedir}/../../../conv-history-consumer</sourceDirectory>
+    <sourceDirectory>${project.basedir}/../../../ms-ml-conv-history-consumer</sourceDirectory>
     <testSourceDirectory>${project.basedir}/src/test/java</testSourceDirectory>
     <plugins>
       <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version></plugin>

@@ -7,11 +7,11 @@ Quick triage:
 
 ```bash
 docker ps -a --format '{{.Names}}\t{{.Status}}'      # what is running, and is it healthy
-docker logs karavan --tail 80                        # Karavan server errors (the UI hides most causes)
-docker logs conv-history-consumer --tail 80          # the consumer's own log
+docker logs consumer-karavan --tail 80                        # Karavan server errors (the UI hides most causes)
+docker logs ms-ml-conv-history-consumer --tail 80          # the consumer's own log
 ```
 
-When the UI shows only a vague popup, **read `docker logs karavan`**. The real
+When the UI shows only a vague popup, **read `docker logs consumer-karavan`**. The real
 reason is almost always there.
 
 ---
@@ -26,20 +26,21 @@ reason is almost always there.
 **Cause:** `GITHUB_MALMEIDAP_PAT` is empty or `.env` is missing. `up.sh` warns
 about this.
 **Fix:** `cp .env.example .env`, set the token (fine-grained PAT for this repo,
-*Contents: read and write*), then `docker compose up -d karavan`.
+*Contents: read and write*), then `docker compose up -d consumer-karavan`.
 
 ### Port already in use / container name conflict
-**Cause:** 9998 (UI) or 5555 (registry) is taken, or another stack uses the
-fixed names `karavan`, `karavan-db`, `karavan-registry`.
+**Cause:** 9997 (UI), 5556 (registry) or 8087 (the consumer) is taken, or another stack uses the
+names `consumer-karavan`, `consumer-karavan-db`, `consumer-registry`. The other repository's stack uses 9998, 5555, 8081 and
+`karavan*` names on purpose, so the two can run together ([table](karavan-setup.md#running-next-to-ms-ml-camel-conv-history-bs)).
 **Fix:** change `KARAVAN_PORT` / `KARAVAN_REGISTRY_PORT` in `.env`. For name
-clashes, stop the other stack.
+clashes, find who holds it: `docker ps --format '{{.Names}} {{.Ports}}'`.
 
 ---
 
 ## Running a project (DevMode)
 
 ### "Error Starting DevMode container" / `pull access denied`
-Log (`docker logs karavan`):
+Log (`docker logs consumer-karavan`):
 ```
 Status 404: pull access denied for apache/camel-karavan-devmode,
 repository does not exist or may require 'docker login'
@@ -52,7 +53,7 @@ registry, next to the Karavan image.
 KARAVAN_DEVMODE_IMAGE: ghcr.io/apache/camel-karavan-devmode:4.22.2
 ```
 Keep the tag equal to the Karavan version. Recreate Karavan:
-`docker compose up -d karavan`. Projects and the UI session survive because
+`docker compose up -d consumer-karavan`. Projects and the UI session survive because
 state is in the Postgres volume.
 Verify an image exists before using it: `docker manifest inspect ghcr.io/apache/camel-karavan-devmode:<tag>`.
 
@@ -65,10 +66,10 @@ the exited container (`docker rm -f <name>`, or **Containers** → Delete), relo
 **Prevent:** before Run, look at the Source tab: a file marked `NEW` that you did not write is the suspect. After a Pull, only files
 that are in Git should be there.
 
-### Run does nothing after I changed the project's `docker-compose.yaml` port to `127.0.0.1:8081:8080`
+### Run does nothing after I changed the project's `docker-compose.yaml` port to `127.0.0.1:8087:8080`
 **Cause:** Karavan reads the project's compose file when it runs the project, and its parser reads each port as `host:container` numbers.
 Karavan's log has `For input string: "127.0.0.1"` (from `DevModeResource`), and no container is created.
-**Fix:** write the port as `"8081:8080"`. The consumer cannot be bound to the loopback from the compose file; use the host's firewall
+**Fix:** write the port as `"8087:8080"`. The consumer cannot be bound to the loopback from the compose file; use the host's firewall
 if the port must not be reachable from the network.
 
 ### I clicked Stop, Delete or Run and nothing happened
@@ -78,7 +79,7 @@ if the port must not be reachable from the network.
 ### I clicked Run, a "Confirm run container?" dialog appeared, I confirmed, and nothing started
 **Cause:** the page has **two different Run buttons**, and the one in the **Containers** tab is not the one that starts a
 project. It runs an *image you built* (Build/Deploy) and asks for confirmation, and with no built image it does nothing:
-the Images list is empty and `docker logs karavan` shows no `DevMode starting` line. The button that starts the project in
+the Images list is empty and `docker logs consumer-karavan` shows no `DevMode starting` line. The button that starts the project in
 DevMode is **Run at the top right of the page**, next to the tab bar.
 **Fix:** click the top-right **Run** (it does not ask for confirmation). Karavan then logs
 `DevMode starting for <project>`, and `docker ps` shows the container within seconds.
@@ -100,11 +101,11 @@ that copy, so it does not see later changes.
 **Cause:** the first run pulls the DevMode image (about 1.5 GB) and then downloads the dependencies from Maven Central. The
 UI shows no progress for either.
 **Fix:** wait, and watch Docker instead: `docker images | grep devmode` while it pulls, then
-`docker logs -f conv-history-consumer` while it downloads. Later runs reuse both and start in about 20 seconds.
+`docker logs -f ms-ml-conv-history-consumer` while it downloads. Later runs reuse both and start in about 20 seconds.
 
 ### A popup flashed ("Error Starting DevMode container", ...) and was gone before I could read it
 **Cause:** Karavan's error toasts disappear after a few seconds and give only a one-line message.
-**Fix:** read the cause in Karavan's server log: `docker logs karavan --since 5m | grep -E 'DevMode|ERROR'`.
+**Fix:** read the cause in Karavan's server log: `docker logs consumer-karavan --since 5m | grep -E 'DevMode|ERROR'`.
 
 ### Header shows a spinner and the container list is empty
 **Cause:** the UI polls Karavan every few seconds and redraws, so what it shows can lag behind Docker by a moment.
@@ -141,7 +142,7 @@ camel.management.port=9876
 camel.management.path=/q
 ```
 Recreate the container; it reports `(healthy)` after about 25 seconds.
-Confirm: `docker exec conv-history-consumer curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9876/q/observe/health` → `200`.
+Confirm: `docker exec ms-ml-conv-history-consumer curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9876/q/observe/health` → `200`.
 The names come from Camel's `camel-main-configuration-metadata.json`. To check
 a property, read that file from the `camel-main` jar.
 
@@ -381,6 +382,6 @@ Remove Karavan and its database. Projects are safe in Git:
 
 ```bash
 ./scripts/clean.sh
-docker rm -f conv-history-consumer 2>/dev/null     # DevMode containers are not removed by clean.sh
+docker rm -f ms-ml-conv-history-consumer 2>/dev/null     # DevMode containers are not removed by clean.sh
 ./scripts/up.sh
 ```

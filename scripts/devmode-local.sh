@@ -9,7 +9,7 @@
 # NAME=value pairs become environment variables of the container. The app.* settings of the project's
 # application.properties can be overridden that way: app.topic is APP_TOPIC, app.kafka.groupId is
 # APP_KAFKA_GROUPID. Example, a throwaway topic and group:
-#   ./scripts/devmode-local.sh conv-history-consumer APP_TOPIC=camel.test.events APP_KAFKA_GROUPID=camel-test
+#   ./scripts/devmode-local.sh ms-ml-conv-history-consumer APP_TOPIC=camel.test.events APP_KAFKA_GROUPID=camel-test
 #
 # Logs:  docker logs -f devmode-local-<project-folder>
 # The Maven cache is kept in the volume devmode-local-m2, so only the first start downloads dependencies.

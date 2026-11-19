@@ -62,9 +62,9 @@ in the schema `public`: the two never compete.
 ```mermaid
 flowchart LR
     git(["GitHub repository<br/>the project's files"])
-    karavan["karavan<br/>designer and API, port 9998"]
-    karavandb[("karavan-db<br/>Karavan's own state")]
-    devmode["conv-history-consumer<br/>DevMode container"]
+    karavan["consumer-karavan<br/>designer and API, port 9997"]
+    karavandb[("consumer-karavan-db<br/>Karavan's own state")]
+    devmode["ms-ml-conv-history-consumer<br/>DevMode container"]
     kafka(["yape-kafka<br/>kafka:29092"])
     sr(["yape-schema-registry<br/>schema-registry:8081"])
     pg[("yape-postgres<br/>db:5432")]
@@ -78,7 +78,7 @@ flowchart LR
 ```
 
 *In words:* Karavan pulls the project from GitHub, keeps its state in its own database, and its **Run** creates the
-`conv-history-consumer` container, which reads Kafka and the registry and writes Postgres. All share the network
+`ms-ml-conv-history-consumer` container, which reads Kafka and the registry and writes Postgres. All share the network
 `yape-local`.
 
 ---

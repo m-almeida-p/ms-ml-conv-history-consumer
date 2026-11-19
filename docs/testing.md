@@ -26,7 +26,7 @@ consumer groups are never touched. If you add a script, scope every `DELETE` to 
 
 One Maven module, run in a Maven container on the cluster network (`maven:3.9-eclipse-temurin-21`, cache in the Docker volume
 `camel-tests-m2`, so only the first run downloads). It compiles **the project's own Java files** (`sourceDirectory` points at
-`conv-history-consumer/`), so a test breaks when the code does, and the YAML routes are loaded from the project folder. Nothing is a copy.
+`ms-ml-conv-history-consumer/`), so a test breaks when the code does, and the YAML routes are loaded from the project folder. Nothing is a copy.
 
 ```bash
 ./scripts/test-camel.sh                         # the whole module
@@ -60,5 +60,8 @@ retries. It touches only rows whose conversation id starts with `t-`.
 2026-11-19, on the copy as committed: **all 3 suites green**. `check-docs.py`: 16 pointers, 46 links, 26 labels, 5 diagrams. JUnit: **80 tests**
 (`DecoderTest` 65, `StoreRouteTest` 15). `test-consumer.sh`: all checks passed (about 2 minutes). The consumer's copy of the test that kept the sync's
 and the consumer's decoder identical was removed, because the sync is not in this repository.
+
+Rerun after the project folder was renamed to `ms-ml-conv-history-consumer` and the ports and names were made unique: still all green.
+The new Karavan stack was started next to the other one (UI 9997 and 9998 both answer, every container name resolves to one container).
 
 Not run here: the consumer under Karavan (`Run` in the UI) from this repository, because it has no GitHub remote yet.

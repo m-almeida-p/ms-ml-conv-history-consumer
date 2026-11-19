@@ -1,0 +1,9 @@
+services:
+  ms-ml-conv-history-consumer:
+    container_name: ms-ml-conv-history-consumer
+    image: ms-ml-conv-history-consumer
+    restart: always
+    ports:
+      - "8087:8080"
+    networks:
+      - karavan

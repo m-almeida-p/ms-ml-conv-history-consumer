@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end test of the conv-history-consumer project against the local cluster.
+# End-to-end test of the ms-ml-conv-history-consumer project against the local cluster.
 #
 #   ./scripts/test-consumer.sh
 #
@@ -19,7 +19,7 @@
 # shellcheck source=./common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-PROJECT="conv-history-consumer"
+PROJECT="ms-ml-conv-history-consumer"
 RUN="$(date +%s)"
 TOPIC="camel.test.${RUN}"
 GROUP="camel-test-${RUN}"

@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PROJECTS = ["conv-history-consumer"]
+PROJECTS = ["ms-ml-conv-history-consumer"]
 MAX_LABEL = 32
 failures = []
 

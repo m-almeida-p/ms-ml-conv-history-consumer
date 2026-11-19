@@ -14,5 +14,5 @@ echo "🚀  Starting Karavan..."
 compose up -d
 
 PORT="$(grep -E '^KARAVAN_PORT=' "${REPO_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)"
-echo "✅  Karavan is starting: http://localhost:${PORT:-9998}"
+echo "✅  Karavan is starting: http://localhost:${PORT:-9997}"
 echo "    First start pulls images and may take a minute. Follow it with ./scripts/logs.sh -f"

@@ -11,7 +11,7 @@ agent -> event store -> Debezium -> Kafka (yape.public.conversation_events) -> t
 
 ## What is in the project
 
-The Karavan project is the folder [`conv-history-consumer/`](conv-history-consumer). Its files are named for the task each one does:
+The Karavan project is the folder [`ms-ml-conv-history-consumer/`](ms-ml-conv-history-consumer). Its files are named for the task each one does:
 
 | File | Task | Route |
 |---|---|---|
@@ -28,11 +28,11 @@ Route 2 cannot be reached without route 1 (the only caller) and route 3 (where a
 ```bash
 ../cluster/scripts/up.sh            # the shared cluster: Kafka, Postgres, Schema Registry
 cp .env.example .env                # then set GITHUB_MALMEIDAP_PAT (git-ignored)
-./scripts/up.sh                     # Karavan on http://localhost:9998
+./scripts/up.sh                     # Karavan on http://localhost:9997
 ./scripts/test-all.sh               # docs check, JUnit, and the consumer on a throwaway topic
 ```
 
-Then in Karavan open `conv-history-consumer` and press the **top-right Run**. Needs the `camel_history` tables, which come from the
+Then in Karavan open `ms-ml-conv-history-consumer` and press the **top-right Run**. Needs the `camel_history` tables, which come from the
 migrations of `ml-genai-agents-bs-testing`.
 
 ## Documentation

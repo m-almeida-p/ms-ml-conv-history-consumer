@@ -59,7 +59,7 @@ class StoreRouteTest {
         main.addInitialProperty("app.schema.registryUrl", System.getenv().getOrDefault("REGISTRY_URL", "http://schema-registry:8081"));
         main.addInitialProperty("app.schema.allowedIds", "2");
         main.addInitialProperty("app.schema.requireFraming", "true");
-        main.configure().withRoutesIncludePattern("file:../../../conv-history-consumer/store-conversation-history.camel.yaml,file:../../../conv-history-consumer/handle-errors-and-dead-letters.camel.yaml");
+        main.configure().withRoutesIncludePattern("file:../../../ms-ml-conv-history-consumer/store-conversation-history.camel.yaml,file:../../../ms-ml-conv-history-consumer/handle-errors-and-dead-letters.camel.yaml");
         main.start();
         template = main.getCamelContext().createProducerTemplate();
     }

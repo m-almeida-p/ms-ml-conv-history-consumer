@@ -15,21 +15,27 @@
 # git-ignored.
 #
 # Start:  ./scripts/up.sh   (also stop.sh, start.sh, logs.sh, clean.sh)
-# Open:   http://localhost:9998
+# Open:   http://localhost:9997
 #
-# The container and port names are the same as in ms-ml-camel-conv-history-bs: run only one of the two Karavan stacks at a time.
+# This stack runs at the same time as the one of ms-ml-camel-conv-history-bs. Everything that could collide is different:
+#   - Karavan UI 9997 (the other: 9998), image registry 5556 (the other: 5555), the consumer's app port 8087 (the other: 8081).
+#   - Container names consumer-karavan, consumer-karavan-db and consumer-registry. They are also the DNS names on the shared
+#     network yape-local, which both stacks join: with the same names, one Karavan could reach the other's database or registry.
+#   - The Karavan project is ms-ml-conv-history-consumer, so its container has a different name from the other's
+#     conv-history-consumer, and the Postgres volume is prefixed by the compose project name.
+#   - The Kafka consumer group is ms-ml-conv-history-consumer, so the two consumers do not split the partitions of the topic.
 name: ms-ml-conv-history-consumer
 
 services:
-  karavan:
+  consumer-karavan:
     image: ghcr.io/apache/camel-karavan:4.22.2
-    container_name: karavan
+    container_name: consumer-karavan
     restart: unless-stopped
     depends_on:
-      karavan-db:
+      consumer-karavan-db:
         condition: service_healthy
     ports:
-      - "127.0.0.1:${KARAVAN_PORT:-9998}:8080"
+      - "127.0.0.1:${KARAVAN_PORT:-9997}:8080"
     environment:
       KARAVAN_GIT_REPOSITORY: ${KARAVAN_GIT_REPOSITORY:-}
       KARAVAN_GIT_USERNAME: ${KARAVAN_GIT_USERNAME:-}
@@ -37,7 +43,7 @@ services:
       KARAVAN_GIT_PASSWORD: ${GITHUB_MALMEIDAP_PAT:-}
       KARAVAN_GIT_BRANCH: ${KARAVAN_GIT_BRANCH:-main}
       # Karavan builds images and pushes them to the registry service below.
-      KARAVAN_CONTAINER_IMAGE_REGISTRY: registry:5000
+      KARAVAN_CONTAINER_IMAGE_REGISTRY: consumer-registry:5000
       KARAVAN_CONTAINER_IMAGE_REGISTRY_USERNAME: ""
       KARAVAN_CONTAINER_IMAGE_REGISTRY_PASSWORD: ""
       KARAVAN_CONTAINER_IMAGE_GROUP: karavan
@@ -49,7 +55,7 @@ services:
       KARAVAN_DEVMODE_IMAGE: ghcr.io/apache/camel-karavan-devmode:4.22.2
       KARAVAN_DATASOURCE_USERNAME: ${KARAVAN_DATASOURCE_USERNAME:-karavan}
       KARAVAN_DATASOURCE_PASSWORD: ${KARAVAN_DATASOURCE_PASSWORD:-karavan}
-      KARAVAN_DATASOURCE_URL: jdbc:postgresql://karavan-db:5432/karavan
+      KARAVAN_DATASOURCE_URL: jdbc:postgresql://consumer-karavan-db:5432/karavan
       KARAVAN_DATASOURCE_SCHEMAS: public
     volumes:
       # Gives Karavan control of the host Docker engine, which it needs to build
@@ -61,9 +67,9 @@ services:
 
   # Karavan's own Postgres, apart from the cluster `db` (Debezium, trust auth).
   # Not published on the host: only Karavan reaches it.
-  karavan-db:
+  consumer-karavan-db:
     image: postgres:18
-    container_name: karavan-db
+    container_name: consumer-karavan-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: karavan
@@ -79,12 +85,12 @@ services:
       retries: 20
     networks: [yape-local]
 
-  registry:
+  consumer-registry:
     image: registry:2
-    container_name: karavan-registry
+    container_name: consumer-registry
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${KARAVAN_REGISTRY_PORT:-5555}:5000"
+      - "127.0.0.1:${KARAVAN_REGISTRY_PORT:-5556}:5000"
     labels:
       - "org.apache.camel.karavan/type=internal"
     networks: [yape-local]

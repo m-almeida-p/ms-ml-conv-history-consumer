@@ -1,8 +1,9 @@
 # Cheatsheet
 
-Commands that were useful. Container names: `karavan`, `karavan-db`,
-`karavan-registry`, `conv-history-consumer` (Karavan stack and consumer) and
-`yape-kafka` (the shared cluster's broker).
+Commands that were useful. Container names: `consumer-karavan`, `consumer-karavan-db`,
+`consumer-registry`, `ms-ml-conv-history-consumer` (Karavan stack and consumer) and
+`yape-kafka` (the shared cluster's broker). The names and ports differ from the stack of `ms-ml-camel-conv-history-bs`, so both run at once
+([table](karavan-setup.md#running-next-to-ms-ml-camel-conv-history-bs)).
 
 ## Karavan stack
 
@@ -13,30 +14,30 @@ Commands that were useful. Container names: `karavan`, `karavan-db`,
 ./scripts/logs.sh -f            # follow logs
 ./scripts/clean.sh              # remove containers AND the Postgres volume (projects stay in Git)
 
-docker logs karavan --tail 80   # the place to look when the UI shows only a vague error
+docker logs consumer-karavan --tail 80   # the place to look when the UI shows only a vague error
 docker compose config -q && echo OK    # validate docker-compose.yml
-docker compose up -d karavan    # apply a compose change; recreates only karavan
+docker compose up -d consumer-karavan    # apply a compose change; recreates only consumer-karavan
 ```
 
-Karavan is ready at <http://localhost:9998> once `docker logs karavan` shows
+Karavan is ready at <http://localhost:9997> once `docker logs consumer-karavan` shows
 `started in ...s` and `Projects loaded`. Readiness probe:
-`curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9998/public/readiness` → `200`.
+`curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9997/public/readiness` → `200`.
 
 ## The consumer container
 
 ```bash
-docker ps -a --filter name=conv-history-consumer --format '{{.Names}}\t{{.Status}}'
-docker logs -f conv-history-consumer
+docker ps -a --filter name=ms-ml-conv-history-consumer --format '{{.Names}}\t{{.Status}}'
+docker logs -f ms-ml-conv-history-consumer
 
 # Only the received-message lines, without ANSI colours
-docker logs conv-history-consumer 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 'Received kafka message'
+docker logs ms-ml-conv-history-consumer 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 'Received kafka message'
 
 # Health: Docker's own verdict, and the endpoint it calls
-docker inspect conv-history-consumer --format '{{.State.Health.Status}}'
-docker exec conv-history-consumer curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9876/q/observe/health
+docker inspect ms-ml-conv-history-consumer --format '{{.State.Health.Status}}'
+docker exec ms-ml-conv-history-consumer curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9876/q/observe/health
 
 # What Camel serves on the app port
-docker exec conv-history-consumer curl -s http://localhost:8080/observe/health
+docker exec ms-ml-conv-history-consumer curl -s http://localhost:8080/observe/health
 ```
 
 Applying a change = Karavan **Containers** tab → **Stop** → **Delete** (each asks you to confirm), then **Run at the top right of the
@@ -45,9 +46,9 @@ page** (not the Run of the Containers tab; see [which button does what](troubles
 ### Dead-letter log and results
 
 ```bash
-docker logs conv-history-consumer 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 'DLQ reason='      # every poison record
-docker logs conv-history-consumer 2>&1 | grep -o 'DLQ reason=[a-z-]*' | sort | uniq -c         # count by reason
-docker logs conv-history-consumer 2>&1 | grep -E 'Event (stored|duplicate)' | tail             # what was stored
+docker logs ms-ml-conv-history-consumer 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 'DLQ reason='      # every poison record
+docker logs ms-ml-conv-history-consumer 2>&1 | grep -o 'DLQ reason=[a-z-]*' | sort | uniq -c         # count by reason
+docker logs ms-ml-conv-history-consumer 2>&1 | grep -E 'Event (stored|duplicate)' | tail             # what was stored
 
 # What the consumer wrote (schema camel_history), and the original consumer's result next to it
 docker exec yape-postgres psql -U postgres -d postgres -c "
@@ -62,8 +63,8 @@ docker exec yape-postgres psql -U postgres -d postgres -c "
 ### Local runner and tests (no Karavan)
 
 ```bash
-./scripts/devmode-local.sh conv-history-consumer APP_TOPIC=camel.test.events APP_KAFKA_GROUPID=camel-test   # run the project
-./scripts/devmode-local.sh stop conv-history-consumer
+./scripts/devmode-local.sh ms-ml-conv-history-consumer APP_TOPIC=camel.test.events APP_KAFKA_GROUPID=camel-test   # run the project
+./scripts/devmode-local.sh stop ms-ml-conv-history-consumer
 ./scripts/test-consumer.sh        # 37 checks on a throwaway topic (about 2 min); only touches rows whose id starts with t-
 ```
 
@@ -142,7 +143,7 @@ Copy the jar out of the container into a scratch folder and unzip there, not
 in the project:
 
 ```bash
-docker cp conv-history-consumer:/karavan/.m2/repository/org/apache/camel/camel-kafka/4.22.2/camel-kafka-4.22.2.jar /tmp/ck.jar
+docker cp ms-ml-conv-history-consumer:/karavan/.m2/repository/org/apache/camel/camel-kafka/4.22.2/camel-kafka-4.22.2.jar /tmp/ck.jar
 unzip -p /tmp/ck.jar org/apache/camel/component/kafka/KafkaConstants.class \
   | LC_ALL=C tr -c '[:print:]' '\n' | LC_ALL=C grep -E '^CamelKafka' | sort -u
 ```

@@ -1,4 +1,4 @@
-# conv-history-consumer
+# ms-ml-conv-history-consumer
 
 Builds the conversation history from the events topic, into three tables, like `ms-ml-conv-history-bs`. It checks each
 record against the Kafka schema and writes the ones it cannot store to a log.
