@@ -5,7 +5,7 @@ It is the consumer half of [`ms-ml-camel-conv-history-bs`](../ms-ml-camel-conv-h
 no API. The Go reference is `ms-ml-conv-history-bs` (its `cmd/consumer`).
 
 ```
-agent -> event store -> Debezium -> Kafka (yape.public.conversation_events) -> this consumer -> camel_history
+agent -> event store -> Debezium -> Kafka (yape.event_store.conversation_events) -> this consumer -> conversation_* tables
                                                                                    inbox, messages, summaries
 ```
 
@@ -35,7 +35,7 @@ cp .env.example .env                # then set GITHUB_MALMEIDAP_PAT (git-ignored
 ./scripts/test-all.sh               # docs check, JUnit, and the consumer on a throwaway topic
 ```
 
-Then in Karavan open `ms-ml-conv-history-consumer` and press the **top-right Run**. Needs the `camel_history` tables, which come from the
+Then in Karavan open `ms-ml-conv-history-consumer` and press the **top-right Run**. Needs the tables of the schema `history`, which come from the
 migrations of [`ms-ml-conv-history-migrations`](../ms-ml-conv-history-migrations) (`make migrations/up`).
 
 ## Documentation

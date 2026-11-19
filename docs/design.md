@@ -37,10 +37,10 @@ Nothing is told by color: every meaning is also in a shape, a line style or a la
 ```mermaid
 flowchart LR
     producer(["Agent and Debezium<br/>publish conversation events"])
-    topic(["Kafka topic<br/>yape.public.conversation_events"])
+    topic(["Kafka topic<br/>yape.event_store.conversation_events"])
     consumer["History consumer<br/>this project, on Camel"]
     registry(["Schema Registry<br/>the schema of each record"])
-    db[("Postgres, schema camel_history<br/>inbox, messages, summaries")]
+    db[("Postgres, schema history<br/>inbox, messages, summaries")]
     dlq[/"Dead-letter log<br/>logger dlq"/]
 
     producer -- "1 publishes records" --> topic
@@ -52,8 +52,8 @@ flowchart LR
 
 *In words:* the agent and Debezium publish records to a Kafka topic. The consumer reads them, reads each schema from the
 registry once, writes the events to three Postgres tables, and writes any record it cannot store to the dead-letter log.
-The original service, `ms-ml-conv-history-bs`, reads the same topic as another consumer group and writes the same tables
-in the schema `public`: the two never compete.
+The original service, `ms-ml-conv-history-bs`, reads the same topic as another consumer group and would write the same tables:
+the consumer of `ms-ml-camel-conv-history-bs` uses its own schema, `camel_history`, so the consumers never compete.
 
 ---
 
@@ -125,7 +125,7 @@ instead (dashed).
 flowchart LR
     in(["event from step 1.2.2"])
     s21["2.1 Write (Idempotent Consumer)"]
-    pg[("Postgres<br/>schema camel_history")]
+    pg[("Postgres<br/>schema history")]
     s22{"2.2 Decide the outcome"}
     s23[/"2.3 Log the outcome"/]
     out(["back to route 1"])

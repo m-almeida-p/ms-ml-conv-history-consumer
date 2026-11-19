@@ -50,14 +50,11 @@ docker logs ms-ml-conv-history-consumer 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 
 docker logs ms-ml-conv-history-consumer 2>&1 | grep -o 'DLQ reason=[a-z-]*' | sort | uniq -c         # count by reason
 docker logs ms-ml-conv-history-consumer 2>&1 | grep -E 'Event (stored|duplicate)' | tail             # what was stored
 
-# What the consumer wrote (schema camel_history), and the original consumer's result next to it
+# What is in the conversation tables (schema history)
 docker exec yape-postgres psql -U postgres -d postgres -c "
-  SELECT 'camel_history' AS who, (SELECT count(*) FROM camel_history.conversation_inbox) AS inbox,
-         (SELECT count(*) FROM camel_history.conversation_messages) AS messages,
-         (SELECT count(*) FROM camel_history.conversation_summaries) AS summaries
-  UNION ALL
-  SELECT 'public (original)', (SELECT count(*) FROM public.conversation_inbox),
-         (SELECT count(*) FROM public.conversation_messages), (SELECT count(*) FROM public.conversation_summaries)"
+  SELECT (SELECT count(*) FROM history.conversation_inbox) AS inbox,
+         (SELECT count(*) FROM history.conversation_messages) AS messages,
+         (SELECT count(*) FROM history.conversation_summaries) AS summaries"
 ```
 
 ### Local runner and tests (no Karavan)
@@ -79,9 +76,9 @@ docker exec yape-kafka kafka-topics --bootstrap-server localhost:9092 --list
 
 # Earliest and latest offset per partition (equal numbers = nothing readable)
 docker exec yape-kafka kafka-run-class kafka.tools.GetOffsetShell \
-  --bootstrap-server localhost:9092 --topic yape.public.conversation_events --time -2   # earliest
+  --bootstrap-server localhost:9092 --topic yape.event_store.conversation_events --time -2   # earliest
 docker exec yape-kafka kafka-run-class kafka.tools.GetOffsetShell \
-  --bootstrap-server localhost:9092 --topic yape.public.conversation_events --time -1   # latest
+  --bootstrap-server localhost:9092 --topic yape.event_store.conversation_events --time -1   # latest
 
 # Who reads the topic
 docker exec yape-kafka kafka-consumer-groups --bootstrap-server localhost:9092 --list
@@ -116,7 +113,7 @@ the real service's group.
    partitions you expect move:
    ```bash
    docker exec yape-kafka kafka-consumer-groups --bootstrap-server localhost:9092 \
-     --group ms-ml-conv-history-consumer --topic yape.public.conversation_events \
+     --group ms-ml-conv-history-consumer --topic yape.event_store.conversation_events \
      --reset-offsets --by-duration PT60M --dry-run
    ```
    `--by-duration PT60M` means "the first record newer than 60 minutes ago".

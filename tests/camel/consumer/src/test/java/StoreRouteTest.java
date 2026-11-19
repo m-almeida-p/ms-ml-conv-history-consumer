@@ -46,7 +46,7 @@ class StoreRouteTest {
     @BeforeAll
     static void boot() throws Exception {
         db = new HikariDataSource();
-        db.setJdbcUrl(System.getenv().getOrDefault("JDBC_URL", "jdbc:postgresql://db:5432/postgres?currentSchema=camel_history"));
+        db.setJdbcUrl(System.getenv().getOrDefault("JDBC_URL", "jdbc:postgresql://db:5432/postgres?currentSchema=history"));
         db.setUsername("postgres");
         db.setMaximumPoolSize(16);
         decoder = new ConversationEventDecoder();

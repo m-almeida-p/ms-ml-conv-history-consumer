@@ -6,15 +6,15 @@
 # It starts the project with scripts/devmode-local.sh on a THROWAWAY topic and consumer group, publishes
 # about 30 records in the format Debezium writes (Schema Registry header + JSON, schema id 2), waits until
 # all are handled, then checks:
-#   - the three tables of the camel_history schema (rows, roles, authors, summary counts),
+#   - the three conversation tables (rows, roles, authors, summary counts),
 #   - the dead-letter log: one line per poison record, with the exact reason,
 #   - that every offset was committed (no lag), so no poison record blocked a partition.
 #
 # It touches only rows whose conversation id starts with "t-" (it removes them first and afterwards) and its own topic.
-# The real rows of camel_history, the real topic and the public.conversation_* tables of ms-ml-conv-history-bs are never
+# The real rows of the schema history (the tables of ms-ml-conv-history-bs) and the real topic are never
 # touched. (An earlier version truncated the three tables, which would have wiped the real history the API serves.)
-# Needs: the cluster up, the camel_history migrations applied (ms-ml-conv-history-migrations:
-# make migrations/up FLOW=camel_conversation), python3.
+# Needs: the cluster up, the history migrations applied (ms-ml-conv-history-migrations:
+# make migrations/up), python3.
 
 # shellcheck source=./common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -41,20 +41,20 @@ check() { # description, expected, actual
 
 cleanup() {
   "${REPO_DIR}/scripts/devmode-local.sh" stop "${PROJECT}" >/dev/null 2>&1 || true
-  sql "DELETE FROM camel_history.conversation_summaries WHERE conversation_id LIKE 't-%';
-       DELETE FROM camel_history.conversation_messages  WHERE conversation_id LIKE 't-%';
-       DELETE FROM camel_history.conversation_inbox     WHERE conversation_id LIKE 't-%';" >/dev/null 2>&1 || true
+  sql "DELETE FROM history.conversation_summaries WHERE conversation_id LIKE 't-%';
+       DELETE FROM history.conversation_messages  WHERE conversation_id LIKE 't-%';
+       DELETE FROM history.conversation_inbox     WHERE conversation_id LIKE 't-%';" >/dev/null 2>&1 || true
   "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --delete --topic "${TOPIC}" >/dev/null 2>&1 || true
   "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --delete --group "${GROUP}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 echo "🧪  topic ${TOPIC}, group ${GROUP}"
-sql "SELECT 1 FROM information_schema.schemata WHERE schema_name='camel_history'" | grep -q 1 \
-  || { echo "❌  schema camel_history is missing: run the migrations first" >&2; exit 1; }
-sql "DELETE FROM camel_history.conversation_summaries WHERE conversation_id LIKE 't-%';
-     DELETE FROM camel_history.conversation_messages  WHERE conversation_id LIKE 't-%';
-     DELETE FROM camel_history.conversation_inbox     WHERE conversation_id LIKE 't-%';" >/dev/null
+sql "SELECT count(*) FROM information_schema.tables WHERE table_schema='history' AND table_name IN ('conversation_inbox','conversation_messages','conversation_summaries')" | grep -q '^3$' \
+  || { echo "❌  the conversation tables are missing: run the migrations first (ms-ml-conv-history-migrations)" >&2; exit 1; }
+sql "DELETE FROM history.conversation_summaries WHERE conversation_id LIKE 't-%';
+     DELETE FROM history.conversation_messages  WHERE conversation_id LIKE 't-%';
+     DELETE FROM history.conversation_inbox     WHERE conversation_id LIKE 't-%';" >/dev/null
 "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --create --topic "${TOPIC}" --partitions 3 --replication-factor 1 >/dev/null 2>&1
 
 echo "🚀  starting the consumer (the first start downloads dependencies, about a minute)"
@@ -169,33 +169,33 @@ done
 echo "    handled $(handled) of ${TOTAL}"
 sleep 3   # let the last offset commits land
 
-echo "🔎  tables (camel_history)"
-check "inbox rows"        "9"  "$(sql "SELECT count(*) FROM camel_history.conversation_inbox WHERE conversation_id LIKE 't-%'")"
-check "message rows"      "6"  "$(sql "SELECT count(*) FROM camel_history.conversation_messages WHERE conversation_id LIKE 't-%'")"
-check "summary rows"      "2"  "$(sql "SELECT count(*) FROM camel_history.conversation_summaries WHERE conversation_id LIKE 't-%'")"
+echo "🔎  tables (conversation_*)"
+check "inbox rows"        "9"  "$(sql "SELECT count(*) FROM history.conversation_inbox WHERE conversation_id LIKE 't-%'")"
+check "message rows"      "6"  "$(sql "SELECT count(*) FROM history.conversation_messages WHERE conversation_id LIKE 't-%'")"
+check "summary rows"      "2"  "$(sql "SELECT count(*) FROM history.conversation_summaries WHERE conversation_id LIKE 't-%'")"
 check "summary t-c1 (3 messages)" "3|2026-11-18 10:00:00+00|2026-11-18 10:00:10+00" \
-  "$(sql "SET TIME ZONE 'UTC'; SELECT message_count||'|'||first_occurred_at||'|'||last_occurred_at FROM camel_history.conversation_summaries WHERE conversation_id='t-c1'" | tail -1)"
-check "summary t-c2 (2 counted messages)" "2" "$(sql "SELECT message_count FROM camel_history.conversation_summaries WHERE conversation_id='t-c2'")"
+  "$(sql "SET TIME ZONE 'UTC'; SELECT message_count||'|'||first_occurred_at||'|'||last_occurred_at FROM history.conversation_summaries WHERE conversation_id='t-c1'" | tail -1)"
+check "summary t-c2 (2 counted messages)" "2" "$(sql "SELECT message_count FROM history.conversation_summaries WHERE conversation_id='t-c2'")"
 check "user message: role and author" "appUser|acc-t1|hola" \
-  "$(sql "SELECT role||'|'||author_id||'|'||text FROM camel_history.conversation_messages WHERE conversation_id='t-c1' AND sequence=1")"
+  "$(sql "SELECT role||'|'||author_id||'|'||text FROM history.conversation_messages WHERE conversation_id='t-c1' AND sequence=1")"
 check "agent message: author is the maker" "appMaker|ms-ml-genai-agent-bs|hola, en que te ayudo" \
-  "$(sql "SELECT role||'|'||author_id||'|'||text FROM camel_history.conversation_messages WHERE conversation_id='t-c1' AND sequence=2")"
+  "$(sql "SELECT role||'|'||author_id||'|'||text FROM history.conversation_messages WHERE conversation_id='t-c1' AND sequence=2")"
 check "guardrail message takes response_text" "appMaker|no puedo ayudarte con eso" \
-  "$(sql "SELECT role||'|'||text FROM camel_history.conversation_messages WHERE conversation_id='t-c1' AND sequence=3")"
+  "$(sql "SELECT role||'|'||text FROM history.conversation_messages WHERE conversation_id='t-c1' AND sequence=3")"
 check "the conflicting event did not overwrite sequence 2" "hola, en que te ayudo" \
-  "$(sql "SELECT text FROM camel_history.conversation_messages WHERE conversation_id='t-c1' AND sequence=2")"
+  "$(sql "SELECT text FROM history.conversation_messages WHERE conversation_id='t-c1' AND sequence=2")"
 check "a non-chat event is in the inbox only" "1|0" \
-  "$(sql "SELECT (SELECT count(*) FROM camel_history.conversation_inbox WHERE conversation_id='t-c1' AND sequence=4)||'|'||(SELECT count(*) FROM camel_history.conversation_messages WHERE conversation_id='t-c1' AND sequence=4)")"
+  "$(sql "SELECT (SELECT count(*) FROM history.conversation_inbox WHERE conversation_id='t-c1' AND sequence=4)||'|'||(SELECT count(*) FROM history.conversation_messages WHERE conversation_id='t-c1' AND sequence=4)")"
 check "events without text or account are inbox only" "2|0" \
-  "$(sql "SELECT (SELECT count(*) FROM camel_history.conversation_inbox WHERE conversation_id='t-c2' AND sequence IN (1,2))||'|'||(SELECT count(*) FROM camel_history.conversation_messages WHERE conversation_id='t-c2' AND sequence IN (1,2))")"
+  "$(sql "SELECT (SELECT count(*) FROM history.conversation_inbox WHERE conversation_id='t-c2' AND sequence IN (1,2))||'|'||(SELECT count(*) FROM history.conversation_messages WHERE conversation_id='t-c2' AND sequence IN (1,2))")"
 check "a message with no account is stored but not counted" "1|appMaker" \
-  "$(sql "SELECT count(*)||'|'||max(role) FROM camel_history.conversation_messages WHERE conversation_id='t-c2' AND sequence=3")"
-check "an empty text is a valid message" "1" "$(sql "SELECT count(*) FROM camel_history.conversation_messages WHERE conversation_id='t-c2' AND sequence=4 AND text=''")"
+  "$(sql "SELECT count(*)||'|'||max(role) FROM history.conversation_messages WHERE conversation_id='t-c2' AND sequence=3")"
+check "an empty text is a valid message" "1" "$(sql "SELECT count(*) FROM history.conversation_messages WHERE conversation_id='t-c2' AND sequence=4 AND text=''")"
 check "truncated flag and unicode text" "true|cortado éñ" \
-  "$(sql "SELECT truncated::text||'|'||text FROM camel_history.conversation_messages WHERE conversation_id='t-c2' AND sequence=5")"
-check "inbox keeps the Kafka coordinates" "${TOPIC}" "$(sql "SELECT DISTINCT kafka_topic FROM camel_history.conversation_inbox WHERE conversation_id LIKE 't-%'")"
-check "inbox rows are stamped projected" "0" "$(sql "SELECT count(*) FROM camel_history.conversation_inbox WHERE conversation_id LIKE 't-%' AND projected_at IS NULL")"
-check "payload is stored as JSON, not as a string" "object" "$(sql "SELECT jsonb_typeof(payload) FROM camel_history.conversation_inbox WHERE conversation_id='t-c1' AND sequence=1")"
+  "$(sql "SELECT truncated::text||'|'||text FROM history.conversation_messages WHERE conversation_id='t-c2' AND sequence=5")"
+check "inbox keeps the Kafka coordinates" "${TOPIC}" "$(sql "SELECT DISTINCT kafka_topic FROM history.conversation_inbox WHERE conversation_id LIKE 't-%'")"
+check "inbox rows are stamped projected" "0" "$(sql "SELECT count(*) FROM history.conversation_inbox WHERE conversation_id LIKE 't-%' AND projected_at IS NULL")"
+check "payload is stored as JSON, not as a string" "object" "$(sql "SELECT jsonb_typeof(payload) FROM history.conversation_inbox WHERE conversation_id='t-c1' AND sequence=1")"
 
 echo "🔎  dead-letter log"
 docker logs "${CONTAINER}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 'DLQ reason=' > "/tmp/camel-test-dlq.$$" || true
@@ -209,7 +209,7 @@ check "a poison record names its field" "1" "$(grep -c 'reason=field-range field
 check "a NUL is refused for good, by SQLSTATE (22021 in a text, 22P05 in a jsonb)" "1 1" \
   "$(grep -c 'reason=store-rejected field=sqlstate-22021 ' "/tmp/camel-test-dlq.$$") $(grep -c 'reason=store-rejected field=sqlstate-22P05 ' "/tmp/camel-test-dlq.$$")"
 check "the refused NUL records left nothing in any table" "0" \
-  "$(sql "SELECT (SELECT count(*) FROM camel_history.conversation_inbox WHERE conversation_id='t-nul') + (SELECT count(*) FROM camel_history.conversation_messages WHERE conversation_id='t-nul')")"
+  "$(sql "SELECT (SELECT count(*) FROM history.conversation_inbox WHERE conversation_id='t-nul') + (SELECT count(*) FROM history.conversation_messages WHERE conversation_id='t-nul')")"
 rm -f "/tmp/camel-test-dlq.$$"
 
 echo "🔎  offsets"
@@ -237,7 +237,7 @@ sys.stdout.buffer.write(frame(1, b'{"conversation_id":"t-out"}') + b"\t" + frame
 PY
 
 "${REPO_DIR}/scripts/devmode-local.sh" "${PROJECT}" "APP_TOPIC=${TOPIC2}" "APP_KAFKA_GROUPID=${GROUP2}" \
-  "APP_DB_URL=jdbc:postgresql://db:5999/postgres?currentSchema=camel_history" >/dev/null
+  "APP_DB_URL=jdbc:postgresql://db:5999/postgres?currentSchema=history" >/dev/null
 for _ in $(seq 1 60); do
   out="$(docker logs "${CONTAINER}" 2>&1 | grep -c 'Failed delivery' || true)"
   [ "${out:-0}" -ge 2 ] && break
@@ -245,7 +245,7 @@ for _ in $(seq 1 60); do
 done
 check "the record is retried in place (at least 2 attempts logged)" "1" "$([ "${out:-0}" -ge 2 ] && echo 1 || echo 0)"
 check "an outage is not dead-lettered" "0" "$(docker logs "${CONTAINER}" 2>&1 | grep -c 'DLQ reason=' || true)"
-check "nothing was stored" "0" "$(sql "SELECT count(*) FROM camel_history.conversation_inbox WHERE conversation_id='t-out'")"
+check "nothing was stored" "0" "$(sql "SELECT count(*) FROM history.conversation_inbox WHERE conversation_id='t-out'")"
 pending="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP2}" 2>/dev/null \
   | awk -v t="${TOPIC2}" '$2==t && $5 ~ /^[0-9]+$/ && ($4=="-" || $4+0 < $5+0) {n++} END {print n+0}')"
 check "its offset was not committed (the record is still pending)" "1" "${pending}"
@@ -259,7 +259,7 @@ for _ in $(seq 1 60); do
 done
 log_has 'Event stored conversation=t-out' && recovered=1 || recovered=0
 check "the record is stored once the database is back" "1" "${recovered}"
-check "and it is in the inbox" "1" "$(sql "SELECT count(*) FROM camel_history.conversation_inbox WHERE conversation_id='t-out'")"
+check "and it is in the inbox" "1" "$(sql "SELECT count(*) FROM history.conversation_inbox WHERE conversation_id='t-out'")"
 sleep 3
 lag="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP3}" 2>/dev/null | awk -v t="${TOPIC2}" '$2==t && $6 ~ /^[0-9]+$/ {s+=$6} END {print s+0}')"
 check "and its offset is then committed" "0" "${lag}"
@@ -303,7 +303,7 @@ rm -f "/tmp/camel-test-unx.$$"
 sleep 3
 lag="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP4}" 2>/dev/null | awk -v t="${TOPIC4}" '$2==t && $6 ~ /^[0-9]+$/ {s+=$6} END {print s+0}')"
 check "their offsets were committed: a bug does not hang the partition" "0" "${lag}"
-check "nothing was written" "0" "$(sql "SELECT count(*) FROM camel_history.conversation_inbox WHERE conversation_id='t-unx'")"
+check "nothing was written" "0" "$(sql "SELECT count(*) FROM history.conversation_inbox WHERE conversation_id='t-unx'")"
 "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --delete --topic "${TOPIC4}" >/dev/null 2>&1 || true
 "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --delete --group "${GROUP4}" >/dev/null 2>&1 || true
 

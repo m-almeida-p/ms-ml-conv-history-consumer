@@ -19,7 +19,7 @@ The full output of each suite is kept in `.test-logs/<suite>.log` (git-ignored).
 ## What is safe to run
 
 Every suite works on **its own rows and topics**: fixtures are keyed with a prefix (`t-` for `test-consumer.sh`, `jt-` for the JUnit
-tests) and removed at the end, and each throwaway topic and consumer group is deleted. The real history in `camel_history` and the real
+tests) and removed at the end, and each throwaway topic and consumer group is deleted. The real history in the conversation tables and the real
 consumer groups are never touched. If you add a script, scope every `DELETE` to your own prefix and never `TRUNCATE`.
 
 ## JUnit (`tests/camel/consumer`)

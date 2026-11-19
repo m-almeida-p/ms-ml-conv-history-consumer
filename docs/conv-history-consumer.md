@@ -25,10 +25,10 @@ each step:
 Records that fail validation or that the store refuses go to route 3. A database or registry outage is retried
 forever and the offset does not move. Anything unexpected is retried 3 times, then goes to route 3 as `reason=unexpected`.
 
-The tables live in the schema **`camel_history`** of the cluster's Postgres, apart from the original consumer's
-`public.conversation_*` tables, so both can run and be compared. Their DDL is the migration folder
-`history/camel_conversation` of the repository `ms-ml-conv-history-migrations`
-(`make migrations/up FLOW=camel_conversation` there).
+The tables are `conversation_inbox`, `conversation_messages` and `conversation_summaries` in the schema **`history`** of the cluster's Postgres: the
+tables `ms-ml-conv-history-bs` (the Go service) uses. The consumer of `ms-ml-camel-conv-history-bs` writes the same three tables in its own schema,
+`camel_history`, because it also needs the Foundry maps that live there; the two never share rows. Their DDL is the migration folder
+`history/conversation` of the repository `ms-ml-conv-history-migrations` (`make migrations/up` there).
 
 ## Project files
 
@@ -60,13 +60,13 @@ In `application.properties`. Any `app.*` value can be overridden by an environme
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `app.topic` | `yape.public.conversation_events` | Topic to read. |
+| `app.topic` | `yape.event_store.conversation_events` | Topic to read. |
 | `app.kafka.brokers` | `kafka:29092` | The cluster's internal listener (from the host: `localhost:9092`). |
 | `app.kafka.groupId` | `ms-ml-conv-history-consumer` | Different from the original service's group (`ms-ml-conv-history-bs`) and from the group of the consumer in `ms-ml-camel-conv-history-bs`, so none of them compete. A new group reads the topic from the start; that is safe, because the inbox refuses a duplicate. |
 | `app.schema.registryUrl` | `http://schema-registry:8081` | Where schemas are read. |
 | `app.schema.allowedIds` | `2` | Schema ids accepted, comma separated. |
 | `app.schema.requireFraming` | `true` | `false` also accepts plain JSON, as the original does. |
-| `app.db.url` / `app.db.user` | `jdbc:postgresql://db:5432/postgres?currentSchema=camel_history` / `postgres` | Target. The cluster trusts local connections: no password. |
+| `app.db.url` / `app.db.user` | `jdbc:postgresql://db:5432/postgres?currentSchema=history` / `postgres` | Target. The cluster trusts local connections: no password. |
 
 The project's port is `8087` on the host (the consumer of `ms-ml-camel-conv-history-bs` has `8081`) (its `docker-compose.yaml`: Karavan reads it, and it must be plain `host:container`).
 
@@ -163,7 +163,7 @@ because the line keeps the body, the records can be replayed after the fix.
 One line per poison record, on its own logger, `dlq`, at `ERROR`:
 
 ```
-DLQ reason=field-range field=conversation_id topic=yape.public.conversation_events partition=3 offset=19 key=\x00\x00\x00\x00\x01{"conversation_id":"bad id"} detail=not 1 to 128 of letters, digits and . _ : - body=\x00\x00\x00\x00\x02{"conversation_id": "bad id", "sequence": 1, ...}
+DLQ reason=field-range field=conversation_id topic=yape.event_store.conversation_events partition=3 offset=19 key=\x00\x00\x00\x00\x01{"conversation_id":"bad id"} detail=not 1 to 128 of letters, digits and . _ : - body=\x00\x00\x00\x00\x02{"conversation_id": "bad id", "sequence": 1, ...}
 ```
 
 | Part | Meaning |
@@ -212,7 +212,7 @@ Use these in `${header.<name>}`. The old `kafka.TOPIC` style names do not exist 
 
 ## Run it
 
-1. Start the cluster and Karavan ([setup guide](karavan-setup.md)); apply the `camel_history` migrations.
+1. Start the cluster and Karavan ([setup guide](karavan-setup.md)); apply the history migrations (`ms-ml-conv-history-migrations`).
 2. In Karavan open `ms-ml-conv-history-consumer` and click **Run at the top right of the page**. (The Run in the Containers tab
    is a different button and does not start DevMode: see [troubleshooting](troubleshooting.md#which-button-does-what).) The first run pulls the DevMode image
    (about 1.5 GB) and downloads the dependencies, so allow a few minutes.
@@ -246,7 +246,7 @@ Two scripts, both against the local cluster; `test-consumer.sh` uses a **throwaw
 | `./scripts/test-camel.sh consumer` | 80 JUnit tests: the decoder at the edges of every field (65, against the real Schema Registry), and routes 2 and 3 on the real Postgres (15: stored, duplicate, conflict, NUL, a million characters, 16 threads on one event, 30 on one conversation). About 25 s. | |
 
 `test-consumer.sh` touches only the rows whose conversation id starts with `t-` (it deletes them before and after), and the JUnit tests only rows keyed `jt-`.
-Neither writes to the real topic or to the `public` tables.
+Neither writes to the real topic, to `camel_history` or to any other schema.
 
 To publish a fake record to the real topic by hand, remember it needs the Schema Registry header, or it is
 dead-lettered as `no-schema-header`, and **Kafka cannot delete records**: if the original service starts later it reads

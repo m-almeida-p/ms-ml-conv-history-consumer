@@ -4,8 +4,8 @@ Read this first if you are picking the work up (a person or another agent). Ever
 
 ## What this is
 
-One Apache Camel Karavan project, `ms-ml-conv-history-consumer`, that reads the Kafka topic `yape.public.conversation_events` (the Debezium
-outbox of the agent's event store) and builds the conversation history in the Postgres schema `camel_history`: `conversation_inbox`,
+One Apache Camel Karavan project, `ms-ml-conv-history-consumer`, that reads the Kafka topic `yape.event_store.conversation_events` (the Debezium
+outbox of the agent's event store) and builds the conversation history in the schema `history`: `conversation_inbox`,
 `conversation_messages` and `conversation_summaries`. It validates each record against the Schema Registry and writes a record it can
 never store to a dead-letter log.
 
@@ -19,11 +19,12 @@ Microsoft Foundry**: no sync project, no API project, no token broker. The behav
 |---|---|---|
 | YAML files | `route-receive`, `route-store`, `route-error-handling` | named for the task: `consume-conversation-events`, `store-conversation-history`, `handle-errors-and-dead-letters` (route ids and step numbers are unchanged, so logs and the Designer read the same) |
 | Consumer group | `ms-ml-camel-conv-history-bs` | `ms-ml-conv-history-consumer`, so it never competes with the consumer of the other repository. A new group starts at the beginning of the topic; that is safe, the inbox refuses a duplicate |
+| Tables | The schema `camel_history` | The schema **`history`** (the Go service's tables). The consumer of `ms-ml-camel-conv-history-bs` stays on `camel_history`, because it also needs the Foundry maps. Their migrations are `history/conversation` and `history/camel_conversation` in `ms-ml-conv-history-migrations` |
 | Compose and `.env` | Karavan, its database, the registry **and** the Foundry token broker | Karavan, its database and the registry |
 | Scripts and docs | all three projects, Foundry, the fake Foundry, oracle, parity check, mutation experiment | the consumer's only |
 | Kafka reading and commit (branch `kamelets`) | In route 1, with a commit step 1.3 and another in route 3 (3.3) | In the Kamelet `kafka-at-least-once-source`; the project has no commit step. Steps 1.3 and 3.3 no longer exist |
 
-Not copied on purpose: `parity-check.sh` (compares with the Go consumer's tables and empties `camel_history`) and the mutation experiment
+Not copied on purpose: `parity-check.sh` (compared the Camel tables with the Go consumer's, and emptied the Camel ones) and the mutation experiment
 (its consumer mutations are in the original repository's `tests/mutation/`).
 
 ## Status
