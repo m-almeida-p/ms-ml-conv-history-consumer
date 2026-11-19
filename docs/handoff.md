@@ -30,12 +30,13 @@ Not copied on purpose: `parity-check.sh` (compares with the Go consumer's tables
 
 | | |
 |---|---|
-| GitHub | `m-almeida-p/ms-ml-conv-history-consumer`. `main` is the **plain-routes version** (the consumer reads Kafka itself); the tag **`backup-before-kamelets`** points at it |
-| Branch `kamelets` | The consumer starts from the Kamelet `kamelets/kafka-at-least-once-source.kamelet.yaml`, which reads the topic and commits the offset after the route. Same behaviour: all 37 system checks and the 80 JUnit tests pass ([testing.md](testing.md#last-run)). **Not merged into `main` yet** |
-| Karavan | `consumer-karavan` on `http://localhost:9997`, reading this repository with the same token as the other stack. Its `.env` has `KARAVAN_GIT_BRANCH=kamelets` while the branch is being tried; `.env.example` says `main` |
-| Run under Karavan (branch `kamelets`) | **Verified 2026-11-19.** Karavan copied the Kamelet into the container by itself, the routes started (`total:3 kamelets:1`), the consumer joined its own group and replayed the topic: 119 duplicates, none stored, lag 0, the tables unchanged, the 2 known unframed test records dead-lettered. It runs on 8087 next to the other stack's consumer on 8081 |
+| GitHub | `m-almeida-p/ms-ml-conv-history-consumer`, branch `main`. The consumer starts from the Kamelet `kamelets/kafka-at-least-once-source.kamelet.yaml`, which reads the topic and commits the offset after the route. The branch `kamelets` is the same code, kept for reference |
+| Backup | The tag **`backup-before-kamelets`** is the previous version, where the consumer reads Kafka itself with a commit step in routes 1 and 3 |
+| Tests | Same behaviour as the backup: all 37 system checks and the 80 JUnit tests pass ([testing.md](testing.md#last-run)) |
+| Run under Karavan | **Verified 2026-11-19.** Karavan copied the Kamelet into the container by itself, the routes started (`total:3 kamelets:1`), the consumer joined its own group and replayed the topic: 119 duplicates, none stored, lag 0, the tables unchanged, the 2 known unframed test records dead-lettered. It runs on 8087 next to the other stack's consumer on 8081 |
+| Karavan | `consumer-karavan` on `http://localhost:9997`, reading this repository (branch `main`) with the same token as the other stack |
 
-**To go back to the plain routes:** `git checkout main` (or `git reset --hard backup-before-kamelets`), then Pull in Karavan.
+**To go back to the plain routes:** `git revert` the Kamelet commits, or `git reset --hard backup-before-kamelets` and force-push (ask the owner first), then Pull in Karavan.
 
 ## Is it healthy? (one minute)
 
@@ -105,8 +106,7 @@ It is a local PoC and says so. Known, accepted by the owner:
 
 | # | What | Notes |
 |---|---|---|
-| 1 | The Kamelet branch is not merged | It is verified under Karavan (see Status). Merge `kamelets` into `main` when you are happy, set `KARAVAN_GIT_BRANCH=main` in `.env`, recreate `consumer-karavan` and Pull |
-| 2 | Rule for Kafka commit failures | `CommitFailedException` and `RebalanceInProgressException` are in no `onException` rule, so one would be dead-lettered as `unexpected`. Add a rule that ignores them (the record redelivers); not done because it could not be provoked to test |
-| 3 | Dependency audit | `postgresql` is declared at 42.7.12; at run time Camel's downloader also puts 42.7.13 on the classpath (which one loads was not determined). HikariCP 6.2.1 and json-schema-validator 1.5.6 have newer **major** versions that were not taken. No scan tool was run |
-| 4 | The owner's migrations `000001`-`000004` | Uncommitted in the producer repo. The tables here depend on them |
-| 5 | The old consumer is still in `ms-ml-camel-conv-history-bs` | Both run at once, on purpose: different ports, names and groups ([table](karavan-setup.md#running-next-to-ms-ml-camel-conv-history-bs)). They write the same three tables, which is safe because the inbox refuses a duplicate, but they do the same work twice |
+| 1 | Rule for Kafka commit failures | `CommitFailedException` and `RebalanceInProgressException` are in no `onException` rule, so one would be dead-lettered as `unexpected`. Add a rule that ignores them (the record redelivers); not done because it could not be provoked to test |
+| 2 | Dependency audit | `postgresql` is declared at 42.7.12; at run time Camel's downloader also puts 42.7.13 on the classpath (which one loads was not determined). HikariCP 6.2.1 and json-schema-validator 1.5.6 have newer **major** versions that were not taken. No scan tool was run |
+| 3 | The owner's migrations `000001`-`000004` | Uncommitted in the producer repo. The tables here depend on them |
+| 4 | The old consumer is still in `ms-ml-camel-conv-history-bs` | Both run at once, on purpose: different ports, names and groups ([table](karavan-setup.md#running-next-to-ms-ml-camel-conv-history-bs)). They write the same three tables, which is safe because the inbox refuses a duplicate, but they do the same work twice |
