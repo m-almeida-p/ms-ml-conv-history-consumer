@@ -10,6 +10,9 @@ require_docker
 require_cluster_network
 warn_if_no_token
 
+echo "🔧  Building the DevMode image (devmode/Dockerfile)..."
+docker build -q -t ms-ml-conv-history-consumer-devmode:4.22.2 "${REPO_DIR}/devmode" >/dev/null
+
 echo "🚀  Starting Karavan..."
 compose up -d
 

@@ -72,6 +72,14 @@ Karavan's log has `For input string: "127.0.0.1"` (from `DevModeResource`), and 
 **Fix:** write the port as `"8087:8080"`. The consumer cannot be bound to the loopback from the compose file; use the host's firewall
 if the port must not be reachable from the network.
 
+### Run starts the container but it has no routes: `Routes startup (total:0)` and `Failed to fetch project files. Platform returned HTTP 500`
+**Cause:** the DevMode container fetches its files from the Karavan server named in `PLATFORM_HOST`, which the stock entrypoint hard-codes as
+`karavan:8080`. With a second Karavan stack on the same network (`ms-ml-camel-conv-history-bs` also has a container called `karavan`), that
+name answers with the other stack's Karavan, which has no such project. The container's code folder is empty (`docker exec <name> ls /karavan/code`).
+**Fix:** this stack uses its own DevMode image, built from `devmode/Dockerfile` with `consumer-karavan:8080`. Run `./scripts/up.sh` (it builds
+the image), recreate `consumer-karavan`, remove the empty container (`docker rm -f ms-ml-conv-history-consumer`) and press Run again.
+**Check:** the container log starts with `PLATFORM_HOST set to: consumer-karavan:8080` and then `Extracted file: ...`.
+
 ### I clicked Stop, Delete or Run and nothing happened
 **Cause:** the buttons of the **Containers** tab (Stop, Delete, Run) each open a confirmation dialog, "Confirm stop container?", "Confirm delete container?" or "Confirm run container?", and do nothing until you click **Confirm**. The dialog is easy to miss; the container is unchanged in `docker ps` until you confirm. The square Stop and the top-right Run of the page header do not ask.
 **Fix:** look for the dialog and click **Confirm**.

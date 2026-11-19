@@ -44,9 +44,15 @@ port that could collide is different:
 | Image registry | `5555` | **`5556`** |
 | Consumer, host port (app port 8080 inside) | `8081` | **`8087`** |
 | Karavan, its database, its registry (container and DNS name on `yape-local`) | `karavan`, `karavan-db`, `karavan-registry` | **`consumer-karavan`, `consumer-karavan-db`, `consumer-registry`** |
+| DevMode image (what **Run** starts the project in) | `ghcr.io/apache/camel-karavan-devmode:4.22.2` | **`ms-ml-conv-history-consumer-devmode:4.22.2`**, built from `devmode/Dockerfile` by `scripts/up.sh` |
 | Karavan project, and so the consumer's container | `conv-history-consumer` | **`ms-ml-conv-history-consumer`** |
 | Kafka consumer group | `ms-ml-camel-conv-history-bs` | **`ms-ml-conv-history-consumer`** |
 | Postgres volume of Karavan | `ms-ml-camel-conv-history-bs_karavan_postgres_data` | `ms-ml-conv-history-consumer_karavan_postgres_data` |
+
+The DNS names matter most, and they are also why the DevMode image is not the stock one. Its entrypoint hard-codes `PLATFORM_HOST="karavan:8080"`,
+the server it fetches the project's files from. On the shared network `karavan` is the **other** stack's Karavan, so a container started by
+this stack asked that one, got HTTP 500, and started with no routes (`Routes startup (total:0)`). `devmode/Dockerfile` changes that one
+line to `consumer-karavan:8080`. (Found by pressing Run, not by looking at the containers: both Karavans were up and answering.)
 
 The DNS names matter most. On a shared network a service name is an alias, and two containers with the same alias both answer it: with
 two Karavans each called `karavan-db`, one Karavan could read the other's projects. The ports the other stack uses besides these are

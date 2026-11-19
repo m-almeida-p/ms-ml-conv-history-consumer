@@ -21,6 +21,8 @@
 #   - Karavan UI 9997 (the other: 9998), image registry 5556 (the other: 5555), the consumer's app port 8087 (the other: 8081).
 #   - Container names consumer-karavan, consumer-karavan-db and consumer-registry. They are also the DNS names on the shared
 #     network yape-local, which both stacks join: with the same names, one Karavan could reach the other's database or registry.
+#   - The DevMode image is built here (devmode/Dockerfile): the stock one asks the server called `karavan` for the project's files, which on
+#     the shared network is the OTHER stack's Karavan.
 #   - The Karavan project is ms-ml-conv-history-consumer, so its container has a different name from the other's
 #     conv-history-consumer, and the Postgres volume is prefixed by the compose project name.
 #   - The Kafka consumer group is ms-ml-conv-history-consumer, so the two consumers do not split the partitions of the topic.
@@ -49,10 +51,10 @@ services:
       KARAVAN_CONTAINER_IMAGE_GROUP: karavan
       # Containers Karavan starts join the shared network.
       KARAVAN_DOCKER_NETWORK: yape-local
-      # DevMode (Run in the UI) runs the routes in this image. Karavan's default,
-      # apache/camel-karavan-devmode, is not on Docker Hub; it is published on ghcr.io
-      # next to the Karavan image, with the same version tag.
-      KARAVAN_DEVMODE_IMAGE: ghcr.io/apache/camel-karavan-devmode:4.22.2
+      # DevMode (Run in the UI) runs the routes in this image: the stock ghcr.io/apache/camel-karavan-devmode (Karavan's default,
+      # apache/camel-karavan-devmode, is not on Docker Hub) plus one line, so that it fetches the project from consumer-karavan and not from
+      # the other stack's `karavan`. Built from devmode/Dockerfile by scripts/up.sh.
+      KARAVAN_DEVMODE_IMAGE: ms-ml-conv-history-consumer-devmode:4.22.2
       KARAVAN_DATASOURCE_USERNAME: ${KARAVAN_DATASOURCE_USERNAME:-karavan}
       KARAVAN_DATASOURCE_PASSWORD: ${KARAVAN_DATASOURCE_PASSWORD:-karavan}
       KARAVAN_DATASOURCE_URL: jdbc:postgresql://consumer-karavan-db:5432/karavan

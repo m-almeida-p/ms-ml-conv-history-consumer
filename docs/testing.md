@@ -68,4 +68,6 @@ Branch `kamelets` (the consumer starts from the Kamelet `kafka-at-least-once-sou
 and all 37 system checks of `test-consumer.sh`, including the commit behaviour (an outage leaves the offset uncommitted, recovery commits it, poison and
 unexpected records are committed). Route 3 lost its commit step, so the JUnit assertions that counted commits there now assert zero.
 
-Not run here: the consumer under Karavan (`Run` in the UI) from this repository, because it has no GitHub remote yet.
+**Under Karavan (Run in the UI), branch `kamelets`:** verified. The Karavan Designer draws the Kamelet as a typed source (Topic, Brokers, Consumer group, Where to start); Run
+copies `kafka-at-least-once-source.kamelet.yaml` into the container; the consumer joins its group, reads the 119 existing events as duplicates, ends with lag 0 and leaves
+the tables as they were. Getting there needed the patched DevMode image ([why](karavan-setup.md#running-next-to-ms-ml-camel-conv-history-bs)).

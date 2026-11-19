@@ -32,7 +32,8 @@ Not copied on purpose: `parity-check.sh` (compares with the Go consumer's tables
 |---|---|
 | GitHub | `m-almeida-p/ms-ml-conv-history-consumer`. `main` is the **plain-routes version** (the consumer reads Kafka itself); the tag **`backup-before-kamelets`** points at it |
 | Branch `kamelets` | The consumer starts from the Kamelet `kamelets/kafka-at-least-once-source.kamelet.yaml`, which reads the topic and commits the offset after the route. Same behaviour: all 37 system checks and the 80 JUnit tests pass ([testing.md](testing.md#last-run)). **Not merged into `main` yet** |
-| Karavan | `consumer-karavan` on `http://localhost:9997`, reading this repository with the same token as the other stack |
+| Karavan | `consumer-karavan` on `http://localhost:9997`, reading this repository with the same token as the other stack. Its `.env` has `KARAVAN_GIT_BRANCH=kamelets` while the branch is being tried; `.env.example` says `main` |
+| Run under Karavan (branch `kamelets`) | **Verified 2026-11-19.** Karavan copied the Kamelet into the container by itself, the routes started (`total:3 kamelets:1`), the consumer joined its own group and replayed the topic: 119 duplicates, none stored, lag 0, the tables unchanged, the 2 known unframed test records dead-lettered. It runs on 8087 next to the other stack's consumer on 8081 |
 
 **To go back to the plain routes:** `git checkout main` (or `git reset --hard backup-before-kamelets`), then Pull in Karavan.
 
@@ -104,7 +105,7 @@ It is a local PoC and says so. Known, accepted by the owner:
 
 | # | What | Notes |
 |---|---|---|
-| 1 | The Kamelet branch is not merged | Run it in Karavan (Pull the branch, Run) before merging to `main`; see [karavan-setup.md](karavan-setup.md) |
+| 1 | The Kamelet branch is not merged | It is verified under Karavan (see Status). Merge `kamelets` into `main` when you are happy, set `KARAVAN_GIT_BRANCH=main` in `.env`, recreate `consumer-karavan` and Pull |
 | 2 | Rule for Kafka commit failures | `CommitFailedException` and `RebalanceInProgressException` are in no `onException` rule, so one would be dead-lettered as `unexpected`. Add a rule that ignores them (the record redelivers); not done because it could not be provoked to test |
 | 3 | Dependency audit | `postgresql` is declared at 42.7.12; at run time Camel's downloader also puts 42.7.13 on the classpath (which one loads was not determined). HikariCP 6.2.1 and json-schema-validator 1.5.6 have newer **major** versions that were not taken. No scan tool was run |
 | 4 | The owner's migrations `000001`-`000004` | Uncommitted in the producer repo. The tables here depend on them |
