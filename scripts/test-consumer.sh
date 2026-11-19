@@ -7,7 +7,8 @@
 # about 30 records in the format Debezium writes (Schema Registry header + JSON, schema id 2), waits until
 # all are handled, then checks:
 #   - the three conversation tables (rows, roles, authors, summary counts),
-#   - the dead-letter log: one line per poison record, with the exact reason,
+#   - the dead-letter table (dead_letter.dead_letters): one row per poison record, with the exact reason and the record as it came,
+#     and the dead-letter log: one line per record, without the record,
 #   - that every offset was committed (no lag), so no poison record blocked a partition.
 #
 # It touches only rows whose conversation id starts with "t-" (it removes them first and afterwards) and its own topic.
@@ -43,18 +44,20 @@ cleanup() {
   "${REPO_DIR}/scripts/devmode-local.sh" stop "${PROJECT}" >/dev/null 2>&1 || true
   sql "DELETE FROM history.conversation_summaries WHERE conversation_id LIKE 't-%';
        DELETE FROM history.conversation_messages  WHERE conversation_id LIKE 't-%';
-       DELETE FROM history.conversation_inbox     WHERE conversation_id LIKE 't-%';" >/dev/null 2>&1 || true
+       DELETE FROM history.conversation_inbox     WHERE conversation_id LIKE 't-%';
+       DELETE FROM dead_letter.dead_letters       WHERE service LIKE 'camel-test-%';" >/dev/null 2>&1 || true
   "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --delete --topic "${TOPIC}" >/dev/null 2>&1 || true
   "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --delete --group "${GROUP}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 echo "🧪  topic ${TOPIC}, group ${GROUP}"
-sql "SELECT count(*) FROM information_schema.tables WHERE table_schema='history' AND table_name IN ('conversation_inbox','conversation_messages','conversation_summaries')" | grep -q '^3$' \
-  || { echo "❌  the conversation tables are missing: run the migrations first (ms-ml-conv-history-migrations)" >&2; exit 1; }
+sql "SELECT count(*) FROM information_schema.tables WHERE (table_schema='history' AND table_name IN ('conversation_inbox','conversation_messages','conversation_summaries')) OR (table_schema='dead_letter' AND table_name='dead_letters')" | grep -q '^4$' \
+  || { echo "❌  the conversation or dead-letter tables are missing: run the migrations first (ms-ml-conv-history-migrations)" >&2; exit 1; }
 sql "DELETE FROM history.conversation_summaries WHERE conversation_id LIKE 't-%';
      DELETE FROM history.conversation_messages  WHERE conversation_id LIKE 't-%';
-     DELETE FROM history.conversation_inbox     WHERE conversation_id LIKE 't-%';" >/dev/null
+     DELETE FROM history.conversation_inbox     WHERE conversation_id LIKE 't-%';
+     DELETE FROM dead_letter.dead_letters       WHERE service LIKE 'camel-test-%';" >/dev/null
 "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --create --topic "${TOPIC}" --partitions 3 --replication-factor 1 >/dev/null 2>&1
 
 echo "🚀  starting the consumer (the first start downloads dependencies, about a minute)"
@@ -197,19 +200,32 @@ check "inbox keeps the Kafka coordinates" "${TOPIC}" "$(sql "SELECT DISTINCT kaf
 check "inbox rows are stamped projected" "0" "$(sql "SELECT count(*) FROM history.conversation_inbox WHERE conversation_id LIKE 't-%' AND projected_at IS NULL")"
 check "payload is stored as JSON, not as a string" "object" "$(sql "SELECT jsonb_typeof(payload) FROM history.conversation_inbox WHERE conversation_id='t-c1' AND sequence=1")"
 
-echo "🔎  dead-letter log"
-docker logs "${CONTAINER}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 'DLQ reason=' > "/tmp/camel-test-dlq.$$" || true
-got="$(sed -E 's/.*DLQ reason=([a-z-]+) field=.*/\1/' "/tmp/camel-test-dlq.$$" | sort | uniq -c | awk '{print $2"="$1}' | paste -sd' ' -)"
+echo "🔎  dead-letter table"
+DL="SELECT %s FROM dead_letter.dead_letters WHERE service='${GROUP}'"
+got="$(sql "$(printf "${DL}" "reason||'='||count(*)") GROUP BY reason ORDER BY reason" | paste -sd' ' -)"
 want="field-missing=2 field-range=6 header=1 json=2 no-schema-header=1 occurred-at=1 payload=1 schema-id=1 schema-violation=1 store-rejected=3"
-check "poison records by reason" "${want}" "${got}"
-check "every dead-letter line names topic, partition, offset and the body" "19" \
-  "$(grep -cE 'topic=[^ ]+ partition=[0-9]+ offset=[0-9]+ key=.* detail=.* body=' "/tmp/camel-test-dlq.$$")"
-check "the body is in the log, the header bytes shown readable" "1" "$(grep -c 'body=\\x00\\x00\\x00\\x00\\x02{' "/tmp/camel-test-dlq.$$" | awk '{print ($1>0)?1:0}')"
-check "a poison record names its field" "1" "$(grep -c 'reason=field-range field=conversation_id ' "/tmp/camel-test-dlq.$$")"
+check "poison records by reason, one row each" "${want}" "${got}"
+check "every row names the topic, the partition and the offset of the record" "19" \
+  "$(sql "$(printf "${DL}" 'count(*)') AND source_topic='${TOPIC}' AND source_partition >= 0 AND source_offset >= 0")"
+check "every row starts open, on attempt 1, and has Kafka's timestamp" "19" \
+  "$(sql "$(printf "${DL}" 'count(*)') AND status='open' AND attempt=1 AND source_timestamp IS NOT NULL")"
+check "a framed record is kept byte for byte: the Schema Registry header, then the JSON" "1" \
+  "$(sql "$(printf "${DL}" 'count(*)') AND reason='field-range' AND encode(substring(record_value from 1 for 5), 'hex')='0000000002' AND substring(record_value from 6 for 1)='{'::bytea" | awk '{print ($1>0)?1:0}')"
+check "the key is kept too, framed like the value" "1" \
+  "$(sql "$(printf "${DL}" 'count(*)') AND reason='field-range' AND encode(substring(record_key from 1 for 5), 'hex')='0000000001'" | awk '{print ($1>0)?1:0}')"
+check "an unframed record is kept as it came" "1" \
+  "$(sql "$(printf "${DL}" 'count(*)') AND reason='no-schema-header' AND substring(record_value from 1 for 1)<>'\\x00'::bytea")"
+check "a poison record names its field" "1" "$(sql "$(printf "${DL}" 'count(*)') AND reason='field-range' AND field='conversation_id'")"
 check "a NUL is refused for good, by SQLSTATE (22021 in a text, 22P05 in a jsonb)" "1 1" \
-  "$(grep -c 'reason=store-rejected field=sqlstate-22021 ' "/tmp/camel-test-dlq.$$") $(grep -c 'reason=store-rejected field=sqlstate-22P05 ' "/tmp/camel-test-dlq.$$")"
+  "$(sql "$(printf "${DL}" 'count(*)') AND reason='store-rejected' AND field='sqlstate-22021'") $(sql "$(printf "${DL}" 'count(*)') AND reason='store-rejected' AND field='sqlstate-22P05'")"
 check "the refused NUL records left nothing in any table" "0" \
   "$(sql "SELECT (SELECT count(*) FROM history.conversation_inbox WHERE conversation_id='t-nul') + (SELECT count(*) FROM history.conversation_messages WHERE conversation_id='t-nul')")"
+
+echo "🔎  dead-letter log"
+docker logs "${CONTAINER}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 'DLQ reason=' > "/tmp/camel-test-dlq.$$" || true
+check "one log line per dead letter, with its coordinates and key" "19" \
+  "$(grep -cE 'DLQ reason=[a-z-]+ field=.* topic=[^ ]+ partition=[0-9]+ offset=[0-9]+ key=.* detail=' "/tmp/camel-test-dlq.$$")"
+check "the record itself is not in the log, only in the table" "0" "$(grep -c 'body=' "/tmp/camel-test-dlq.$$" || true)"
 rm -f "/tmp/camel-test-dlq.$$"
 
 echo "🔎  offsets"
@@ -233,6 +249,9 @@ event = {"conversation_id": "t-out", "sequence": 1, "event_name": "UserMessageSe
          "payload": json.dumps({"text": "outage"}), "metadata": "{}", "correlation_id": "c", "id_yape_account": "acc-out",
          "actor": "user", "flow": "p2p", "occurred_at": "2026-11-18T12:00:00.000000Z"}
 frame = lambda sid, b: b"\x00" + sid.to_bytes(4, "big") + b
+# The refused record goes FIRST: with one partition, a record being retried blocks the ones behind it, and the point is to see the
+# dead-letter insert meet the outage too.
+sys.stdout.buffer.write(frame(1, b'{"conversation_id":"t-out-poison"}') + b"\t" + b"this record has no Schema Registry header" + b"\n")
 sys.stdout.buffer.write(frame(1, b'{"conversation_id":"t-out"}') + b"\t" + frame(2, json.dumps(event).encode()) + b"\n")
 PY
 
@@ -244,7 +263,8 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 check "the record is retried in place (at least 2 attempts logged)" "1" "$([ "${out:-0}" -ge 2 ] && echo 1 || echo 0)"
-check "an outage is not dead-lettered" "0" "$(docker logs "${CONTAINER}" 2>&1 | grep -c 'DLQ reason=' || true)"
+check "an outage is not dead-lettered, and a refused record waits too: no log line, no row" "0 0" \
+  "$(docker logs "${CONTAINER}" 2>&1 | grep -c 'DLQ reason=' || true) $(sql "SELECT count(*) FROM dead_letter.dead_letters WHERE service='${GROUP2}'")"
 check "nothing was stored" "0" "$(sql "SELECT count(*) FROM history.conversation_inbox WHERE conversation_id='t-out'")"
 pending="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP2}" 2>/dev/null \
   | awk -v t="${TOPIC2}" '$2==t && $5 ~ /^[0-9]+$/ && ($4=="-" || $4+0 < $5+0) {n++} END {print n+0}')"
@@ -263,6 +283,8 @@ check "and it is in the inbox" "1" "$(sql "SELECT count(*) FROM history.conversa
 sleep 3
 lag="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP3}" 2>/dev/null | awk -v t="${TOPIC2}" '$2==t && $6 ~ /^[0-9]+$/ {s+=$6} END {print s+0}')"
 check "and its offset is then committed" "0" "${lag}"
+check "the refused record that met the outage is in the dead-letter table once the database is back, once" "no-schema-header=1" \
+  "$(sql "SELECT reason||'='||count(*) FROM dead_letter.dead_letters WHERE service='${GROUP3}' GROUP BY reason")"
 "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --delete --topic "${TOPIC2}" >/dev/null 2>&1 || true
 for g in "${GROUP2}" "${GROUP3}"; do "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --delete --group "$g" >/dev/null 2>&1 || true; done
 
@@ -298,7 +320,13 @@ check "the dead-letter line names the exception class and carries its message" "
   "$(grep 'DLQ reason=unexpected' "/tmp/camel-test-unx.$$" | head -1 | grep -c 'field=BadSqlGrammarException .* detail=[^ ]' || true)"
 check "each was tried 3 more times before giving up (at least 4 failed deliveries per record)" "1" \
   "$([ "$(grep -c 'Failed delivery' "/tmp/camel-test-unx.$$" || true)" -ge 8 ] && echo 1 || echo 0)"
-check "the body is in the line" "2" "$(grep 'DLQ reason=unexpected' "/tmp/camel-test-unx.$$" | grep -c 'body=\\x00\\x00\\x00\\x00\\x02{' || true)"
+check "the record is not in the log" "0" "$(grep 'DLQ reason=unexpected' "/tmp/camel-test-unx.$$" | grep -c 'body=' || true)"
+DL4="FROM dead_letter.dead_letters WHERE service='${GROUP4}'"
+check "the table has one row per record, even though the store's schema is missing (the insert names its schema)" "2" "$(sql "SELECT count(*) ${DL4} AND reason='unexpected'")"
+check "each row names the exception class and the 4 attempts" "2 2" \
+  "$(sql "SELECT count(*) ${DL4} AND field='BadSqlGrammarException' AND exception_class LIKE '%BadSqlGrammarException'") $(sql "SELECT count(*) ${DL4} AND attempt=4")"
+check "each row holds the original record: the Schema Registry header, then the JSON" "2" \
+  "$(sql "SELECT count(*) ${DL4} AND encode(substring(record_value from 1 for 5), 'hex')='0000000002' AND convert_from(substring(record_value from 6), 'UTF8') LIKE '%t-unx%'")"
 rm -f "/tmp/camel-test-unx.$$"
 sleep 3
 lag="$("${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP4}" 2>/dev/null | awk -v t="${TOPIC4}" '$2==t && $6 ~ /^[0-9]+$/ {s+=$6} END {print s+0}')"

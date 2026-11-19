@@ -43,9 +43,13 @@ docker exec ms-ml-conv-history-consumer curl -s http://localhost:8080/observe/he
 Applying a change = Karavan **Containers** tab → **Stop** → **Delete** (each asks you to confirm), then **Run at the top right of the
 page** (not the Run of the Containers tab; see [which button does what](troubleshooting.md#which-button-does-what)).
 
-### Dead-letter log and results
+### Dead letters (table and log) and results
 
 ```bash
+# The dead letters of this consumer, as rows (the record is in record_key / record_value)
+docker exec yape-postgres psql -U postgres -c "SELECT id, reason, field, source_partition, source_offset, status, failed_at
+  FROM dead_letter.dead_letters WHERE service = 'ms-ml-conv-history-consumer' ORDER BY failed_at DESC LIMIT 20"
+
 docker logs ms-ml-conv-history-consumer 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 'DLQ reason='      # every poison record
 docker logs ms-ml-conv-history-consumer 2>&1 | grep -o 'DLQ reason=[a-z-]*' | sort | uniq -c         # count by reason
 docker logs ms-ml-conv-history-consumer 2>&1 | grep -E 'Event (stored|duplicate)' | tail             # what was stored
@@ -62,7 +66,7 @@ docker exec yape-postgres psql -U postgres -d postgres -c "
 ```bash
 ./scripts/devmode-local.sh ms-ml-conv-history-consumer APP_TOPIC=camel.test.events APP_KAFKA_GROUPID=camel-test   # run the project
 ./scripts/devmode-local.sh stop ms-ml-conv-history-consumer
-./scripts/test-consumer.sh        # 37 checks on a throwaway topic (about 2 min); only touches rows whose id starts with t-
+./scripts/test-consumer.sh        # 46 checks on a throwaway topic (about 2 min); only touches rows whose id starts with t-
 ```
 
 ## Kafka (inside the `yape-kafka` container)

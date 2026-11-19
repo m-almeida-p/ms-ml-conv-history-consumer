@@ -35,8 +35,9 @@ One Maven module, run in a Maven container on the cluster network (`maven:3.9-ec
 
 | Class | What it proves |
 |---|---|
-| `DecoderTest` | The decoder at the edge of every field, against the real Schema Registry (read only); tombstones |
-| `StoreRouteTest` | Routes 2 and 3 with their real error rules on the cluster's Postgres: stored, duplicate, conflict, a NUL (refused for good), a million characters, 16 threads on one event, 30 on one conversation |
+| `DecoderTest` | The decoder at the edge of every field, against the real Schema Registry (read only); tombstones; that the original key, value and Kafka headers are kept as bytes, also for a refused record |
+| `DeadLetterRecordTest` | The parameters of the dead-letter row, with no database: coordinates, the bytes as they came, NULs removed from the texts, the detail cut, the attempt (1, or the retries plus 1 for an unexpected error), the exception class only for an unexpected error |
+| `StoreRouteTest` | Routes 2 and 3 with their real error rules on the cluster's Postgres: stored, duplicate, conflict, a NUL (refused for good), a million characters, 16 threads on one event, 30 on one conversation; and the dead-letter table: a refused record stored byte for byte with its coordinates, the same record twice leaving one row, a record the store refuses keeping the original bytes and not the decoded event, an unexpected error with its class and attempts |
 
 **What the JUnit tests do not cover:** route 1 and the Kamelet (the Kafka subscription and the offset commit). `test-consumer.sh` does: it runs the project with its Kamelet, as Karavan does. The route tests assert that routes 2 and 3 do **not** commit, because the Kamelet does.
 
@@ -44,9 +45,9 @@ One Maven module, run in a Maven container on the cluster network (`maven:3.9-ec
 
 Starts the project with `devmode-local.sh` on a throwaway topic and group, publishes about 30 records in the format Debezium writes (Schema
 Registry header and JSON, schema id 2), waits until all are handled, and checks: the three tables (rows, roles, authors, summary counts),
-the dead-letter log (one line per poison record, with its exact reason), that every offset was committed (no lag, so no poison record
-blocks a partition), that an unreachable database is retried and recovers, and that an unexpected error is dead-lettered after three
-retries. It touches only rows whose conversation id starts with `t-`.
+the dead-letter table (one row per poison record with its exact reason, the record byte for byte, its coordinates and Kafka's timestamp) and the log (one line each, without the record), that every offset was committed (no lag, so no poison record
+blocks a partition), that an unreachable database is retried and recovers (a refused record that meets the outage waits, and is written once the database is back), and that an unexpected error is dead-lettered after three
+retries with its class and four attempts, even when the store's schema is missing. It touches only rows whose conversation id starts with `t-`.
 
 ## Adding a test
 
@@ -56,6 +57,13 @@ retries. It touches only rows whose conversation id starts with `t-`.
 4. Run `./scripts/test-all.sh`, and `python3 -I scripts/check-docs.py` if you touched a route, a label or a doc.
 
 ## Last run
+
+2026-11-19, with the dead letters in `dead_letter.dead_letters` (the change of this section): **all 3 suites green**: docs check, **95 JUnit tests** and **46 system checks**, no test row
+left in any table. The two things worth knowing: a refused record that meets a database outage is retried in place and written exactly once when the database returns, with
+its offset committed; and the redelivery counter was **not** usable when the Dead Letter Channel calls route 3: a record Camel had tried 4 times was recorded as attempt 1. So the
+attempt of an unexpected error is `app.unexpected.maxRetries` + 1, from the setting the retry policy reads, and the system test checks both the 4 failed deliveries and `attempt = 4`.
+
+Earlier runs:
 
 2026-11-19, on the plain-routes version (tag `backup-before-kamelets`): **all 3 suites green**. `check-docs.py`: 16 pointers, 46 links, 26 labels, 5 diagrams. JUnit: **80 tests**
 (`DecoderTest` 65, `StoreRouteTest` 15). `test-consumer.sh`: all checks passed (about 2 minutes). The consumer's copy of the test that kept the sync's

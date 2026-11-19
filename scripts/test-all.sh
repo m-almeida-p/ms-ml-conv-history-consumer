@@ -46,7 +46,7 @@ for entry in "${SUITES[@]}"; do
   start=$(date +%s)
   if bash -c "${command}" > "${log}" 2>&1; then status="ok"; else status="FAILED"; failed=$((failed + 1)); fi
   seconds=$(( $(date +%s) - start ))
-  summary="$(sed 's/\x1b\[[0-9;]*m//g' "${log}" | grep -E 'tests,|checks|all checks passed|agree|passed|✅|❌' | tail -1 | cut -c1-90)"
+  summary="$(sed 's/\x1b\[[0-9;]*m//g' "${log}" | grep -aE 'tests,|checks|all checks passed|agree|passed|✅|❌' | tail -1 | cut -c1-90)"
   results+=("${status}"); times+=("${seconds}s"); notes+=("${summary}")
   if [ "${status}" = FAILED ]; then
     echo "   ❌ ${name} failed; last lines of ${log}:"; sed 's/\x1b\[[0-9;]*m//g' "${log}" | grep -E 'FAIL|ERROR|expected|❌' | head -12 | cut -c1-200 | sed 's/^/      /'

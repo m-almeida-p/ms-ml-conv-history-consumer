@@ -17,7 +17,7 @@ The Karavan project is the folder [`ms-ml-conv-history-consumer/`](ms-ml-conv-hi
 |---|---|---|
 | `consume-conversation-events.camel.yaml` | Start from the Kamelet source, decode and validate the record, hand it on | 1 Receive |
 | `store-conversation-history.camel.yaml` | Write the event to the three tables in one statement (**the store route**) | 2 Store |
-| `handle-errors-and-dead-letters.camel.yaml` | The error rules, and the dead-letter log for records that can never be stored | 3 Dead-letter |
+| `handle-errors-and-dead-letters.camel.yaml` | The error rules, and the dead-letter table for records that can never be stored | 3 Dead-letter |
 | `*.java` | The decoder, the store outcome, the poison exception, the store refusal | |
 | `application.properties` | Settings (`app.*`), dependencies, datasource | |
 

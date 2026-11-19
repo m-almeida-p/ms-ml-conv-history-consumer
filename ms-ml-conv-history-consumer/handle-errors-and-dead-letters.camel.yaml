@@ -2,8 +2,8 @@
     id: errorRules
     # Dead Letter Channel for every unexpected error. Anything no onException rule below recognizes is a bug or
     # data nobody foresaw. Retrying a bug cannot succeed and an endless loop would hide it behind a stuck
-    # partition, so it is tried 3 more times and then sent to route 3 as reason=unexpected. The record is kept
-    # in the log with its body, so it can be replayed after the fix.
+    # partition, so it is tried app.unexpected.maxRetries more times (3) and then sent to route 3 as reason=unexpected. Route 3
+    # keeps the record in dead_letter.dead_letters, as it came, so it can be replayed after the fix.
     errorHandler:
       id: errorHandlerDeadLetter
       deadLetterChannel:
@@ -11,7 +11,7 @@
         deadLetterUri: direct:deadLetter
         redeliveryPolicy:
           id: redeliveryPolicyUnexpected
-          maximumRedeliveries: "3"
+          maximumRedeliveries: "{{app.unexpected.maxRetries}}"
           redeliveryDelay: "500"
           useExponentialBackOff: "true"
           backOffMultiplier: "2"
@@ -99,7 +99,7 @@
 - route:
     id: routeDeadLetter
     description: 3 Dead-letter
-    note: "A record that cannot be stored, written to the log. Docs: conv-history-consumer.md > The dead-letter log."
+    note: "A record that cannot be stored, written to the dead-letter table and to the log. Docs: conv-history-consumer.md > The dead-letter table."
     nodePrefixId: routeDeadLetter
     routeConfigurationId: errorRules
     from:
@@ -112,7 +112,7 @@
         - choice:
             id: nameUnexpectedReason
             description: 3.1 Name the reason if none
-            note: "Poison already has a reason; an unexpected error gets its exception class and message (Content-Based Router). Docs: conv-history-consumer.md > The dead-letter log."
+            note: "Poison already has a reason; an unexpected error gets its exception class and message (Content-Based Router). Docs: conv-history-consumer.md > The dead-letter table."
             when:
               - id: whenNoReason
                 description: No reason yet
@@ -138,10 +138,32 @@
                       expression:
                         simple:
                           expression: "${exception.message}"
+        - bean:
+            id: prepareDeadLetter
+            description: 3.2 Prepare the row
+            note: "Builds the row's parameters from the record the decoder kept (the original key, value and Kafka headers), the Kafka coordinates, the reason and the attempt. Texts lose any NUL. Docs: conv-history-consumer.md > The dead-letter table."
+            ref: deadLetterRecord
+            method: prepare
+        - to:
+            id: writeDeadLetter
+            description: 3.3 Write the dead letter
+            note: "One row in dead_letter.dead_letters, the record exactly as it came. ON CONFLICT DO NOTHING makes a retry harmless. If the insert fails the record is read again: it is never lost (Dead Letter Channel). Docs: conv-history-consumer.md > The dead-letter table."
+            uri: sql
+            parameters:
+              dataSource: "#pgDataSource"
+              query: >-
+                INSERT INTO dead_letter.dead_letters
+                  (service, source_topic, source_partition, source_offset, source_timestamp, record_key, record_value, headers,
+                   reason, field, detail, exception_class, attempt)
+                VALUES
+                  (:#service, :#topic, :#partition, :#offset, CAST(:#timestamp AS timestamptz), CAST(:#key AS bytea),
+                   CAST(:#value AS bytea), CAST(:#headers AS jsonb), :#reason, CAST(:#field AS text), CAST(:#detail AS text),
+                   CAST(:#exceptionClass AS text), :#attempt)
+                ON CONFLICT (service, source_topic, source_partition, source_offset) DO NOTHING
         - log:
             id: logDeadLetter
-            description: 3.2 Write the dead-letter log
-            note: "One ERROR line on logger dlq, with the body. Docs: conv-history-consumer.md > The dead-letter log."
+            description: 3.4 Write the dead-letter log
+            note: "One ERROR line on logger dlq: reason, field, coordinates, key and detail. The record itself is in the table, not here. Docs: conv-history-consumer.md > The dead-letter table."
             logName: dlq
             loggingLevel: ERROR
-            message: "DLQ reason=${exchangeProperty.dlqReason} field=${exchangeProperty.dlqField} topic=${header.CamelKafkaTopic} partition=${header.CamelKafkaPartition} offset=${header.CamelKafkaOffset} key=${exchangeProperty.rawKey} detail=${exchangeProperty.dlqDetail} body=${exchangeProperty.rawText}"
+            message: "DLQ reason=${exchangeProperty.dlqReason} field=${exchangeProperty.dlqField} topic=${header.CamelKafkaTopic} partition=${header.CamelKafkaPartition} offset=${header.CamelKafkaOffset} key=${exchangeProperty.rawKey} detail=${exchangeProperty.dlqDetail}"

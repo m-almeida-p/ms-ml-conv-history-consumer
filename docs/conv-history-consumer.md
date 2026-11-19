@@ -3,14 +3,14 @@
 A Camel Kafka consumer, built in Karavan, that **builds the conversation history** from the events topic: the
 same three tables, with the same rules, as the reference service
 [`ms-ml-conv-history-bs`](../../ms-ml-conv-history-bs). It also enforces the Kafka schema and writes every
-poison message to a dead-letter log.
+poison message to the dead-letter table.
 
 Project folder: [`ms-ml-conv-history-consumer/`](../ms-ml-conv-history-consumer)
 
 ## What it does
 
 It reads records from the events topic and, for each one, writes the event to three tables. A record it cannot store
-goes to the dead-letter log. The diagrams, from the big picture down to the steps, are in [design.md](design.md): start
+goes to the dead-letter table. The diagrams, from the big picture down to the steps, are in [design.md](design.md): start
 with its [context diagram](design.md#level-1-context).
 
 The Designer draws **three routes**, and the numbers below are the same there, in the diagrams and in the notes of
@@ -20,7 +20,7 @@ each step:
 |---|---|
 | **1 Receive** | 1.1 Decode and validate the record (schema id, registry schema, contract, projection) → 1.2 Route by kind of record (a tombstone is skipped, any other record goes to route 2) The offset is committed by the Kamelet source when route 1 returns, not by a step of its own |
 | **2 Store** | 2.1 Write inbox, message and summary with one statement in one transaction → 2.2 Decide stored, duplicate or conflict → 2.3 Log the outcome |
-| **3 Dead-letter** | 3.1 Name the reason if no rule did → 3.2 Write the record to the dead-letter log. Its offset is committed by the Kamelet source, as for any record |
+| **3 Dead-letter** | 3.1 Name the reason if no rule did → 3.2 Prepare the row → 3.3 Write the dead letter → 3.4 Write the log line. Its offset is committed by the Kamelet source, as for any record |
 
 Records that fail validation or that the store refuses go to route 3. A database or registry outage is retried
 forever and the offset does not move. Anything unexpected is retried 3 times, then goes to route 3 as `reason=unexpected`.
@@ -40,7 +40,8 @@ tables `ms-ml-conv-history-bs` (the Go service) uses. The consumer of `ms-ml-cam
 | `PROJECT.md` | The legend, the numbering and the vocabulary, shown with the project in Karavan. |
 | `ConversationEventDecoder.java` | Schema id check, registry schema validation, contract, projection. |
 | `StoreOutcome.java` | Reads the store statement's result: `stored`, `duplicate`, or a conflict. |
-| `StoreRefusal.java` | Names a store refusal for the dead-letter log: reason `store-rejected`, field `sqlstate-<code>`, found in the cause chain. |
+| `DeadLetterRecord.java` | Builds the parameters of the dead-letter row from the record the decoder kept, the Kafka coordinates and the reason. |
+| `StoreRefusal.java` | Names a store refusal for the dead-letter row: reason `store-rejected`, field `sqlstate-<code>`, found in the cause chain. |
 | `PoisonRecordException.java` | The exception for a record that can never be stored. |
 | `application.properties` | Camel settings, dependencies, the datasource and the `app.*` settings. |
 
@@ -66,6 +67,7 @@ In `application.properties`. Any `app.*` value can be overridden by an environme
 | `app.schema.registryUrl` | `http://schema-registry:8081` | Where schemas are read. |
 | `app.schema.allowedIds` | `2` | Schema ids accepted, comma separated. |
 | `app.schema.requireFraming` | `true` | `false` also accepts plain JSON, as the original does. |
+| `app.unexpected.maxRetries` | `3` | How many times a record that fails in a way no rule recognizes is tried again before it is dead-lettered as `unexpected`. The Dead Letter Channel's policy and the `attempt` of the dead-letter row both read it. |
 | `app.db.url` / `app.db.user` | `jdbc:postgresql://db:5432/postgres?currentSchema=history` / `postgres` | Target. The cluster trusts local connections: no password. |
 
 The project's port is `8087` on the host (the consumer of `ms-ml-camel-conv-history-bs` has `8081`) (its `docker-compose.yaml`: Karavan reads it, and it must be plain `host:container`).
@@ -156,38 +158,51 @@ Why unexpected errors are dead-lettered and not retried forever: retrying a bug 
 would hide it behind a stuck partition. A burst of `reason=unexpected` lines is loud and easy to alert on, and
 because the line keeps the body, the records can be replayed after the fix.
 
-## The dead-letter log
+## The dead-letter table
 
-*Designer: route 3, steps 3.1 and 3.2.*
+*Designer: route 3, steps 3.1 to 3.4.*
 
-One line per poison record, on its own logger, `dlq`, at `ERROR`:
+A record the consumer refuses for good is written to **`dead_letter.dead_letters`**, a table shared by every consumer
+(`ms-ml-conv-history-migrations`, folder `shared/dead_letter`; its README has the columns, the replay and the retention). One row per
+source record and service, the record **exactly as Kafka delivered it**:
 
-```
-DLQ reason=field-range field=conversation_id topic=yape.event_store.conversation_events partition=3 offset=19 key=\x00\x00\x00\x00\x01{"conversation_id":"bad id"} detail=not 1 to 128 of letters, digits and . _ : - body=\x00\x00\x00\x00\x02{"conversation_id": "bad id", "sequence": 1, ...}
-```
-
-| Part | Meaning |
+| Column | What this consumer puts in it |
 |---|---|
-| `reason` | Why it was refused (tables above). |
-| `field` | The offending field, or for `store-rejected` the SQLSTATE, or for `unexpected` the exception class. |
-| `topic` `partition` `offset` | Where the record is, so it can be found and replayed. |
-| `key`, `body` | The record as text. The Schema Registry header's zero bytes are shown as `\x00`. Capped at 16,384 characters. |
-| `detail` | A short explanation. |
+| `service` | Its consumer group, `app.kafka.groupId` (`ms-ml-conv-history-consumer`). |
+| `source_topic`, `source_partition`, `source_offset`, `source_timestamp` | Where the record is in Kafka. With `service` they are the unique key: a retried insert changes nothing. |
+| `record_key`, `record_value`, `headers` | The original bytes of the key and the value (the decoder keeps them before anything changes the body; the Kamelet delivers the key as bytes) and the Kafka headers as JSON. A replay publishes these bytes again. |
+| `reason`, `field`, `detail`, `exception_class` | Why (tables above). `field` is the offending field, for `store-rejected` the SQLSTATE, for `unexpected` the exception class. NULs are removed from the texts, so the insert cannot fail on them. |
+| `attempt` | 1 for a refused record; for `unexpected`, `app.unexpected.maxRetries` + 1 (the same setting drives the retries). |
+| `status` | Starts `open`. Whoever replays or discards the record sets `replayed` or `discarded` and `resolved_at`. |
 
-> **The body is logged in full.** It holds conversation text and account IDs. That is acceptable with fake data on a
-> local machine, and it makes replay possible. The reference service deliberately logs no content. Before using real
-> data or a shared environment, remove `body=${exchangeProperty.rawText}` from the `logDeadLetter` step in
-> `handle-errors-and-dead-letters.camel.yaml`.
+**Steps.** 3.1 names the reason if none did (an unexpected error). 3.2 (`DeadLetterRecord.java`) builds the row's parameters. 3.3 writes the
+row with `ON CONFLICT DO NOTHING`. 3.4 writes the log line. The Kamelet commits the offset after that, when route 1 returns.
+
+**The record is never lost.** The offset moves only after the row is written. If the insert cannot be done, the route throws and the record
+is read again: a database outage is retried in place (tested: a refused record that meets an outage waits, and is written once once the
+database is back); any other failure of the insert blocks the partition and shows in the log, instead of dropping the record.
+
+**The log keeps one line, without the record**, on its own logger `dlq` at `ERROR`:
+
+```
+DLQ reason=field-range field=conversation_id topic=yape.event_store.conversation_events partition=3 offset=19 key=\x00\x00\x00\x00\x01{"conversation_id":"bad id"} detail=not 1 to 128 of letters, digits and . _ : - 
+```
+
+The record's text, which holds conversation text and account ids, is in the table and nowhere else. `key` is the key as readable text (the
+Schema Registry header's zero bytes shown as `\x00`, capped at 16,384 characters).
+
+**Privacy.** The table holds the original record: give it the same access and retention as the event store.
 
 Read it:
 
 ```bash
-docker logs ms-ml-conv-history-consumer 2>&1 | grep 'DLQ reason='
-# count by reason
-docker logs ms-ml-conv-history-consumer 2>&1 | grep -o 'DLQ reason=[a-z-]*' | sort | uniq -c
+docker exec yape-postgres psql -U postgres -c "SELECT id, reason, field, source_partition, source_offset, status, failed_at
+  FROM dead_letter.dead_letters WHERE service = 'ms-ml-conv-history-consumer' AND status = 'open' ORDER BY failed_at"
+docker logs ms-ml-conv-history-consumer 2>&1 | grep 'DLQ reason='        # the same, as log lines
 ```
 
-**Replay** after a fix: rewind the group to the offsets in the lines (see the [cheatsheet](cheatsheet.md#consumer-group-offsets)).
+**Replay** after a fix: publish the open rows' `record_key` and `record_value` to `source_topic` again, then mark them `replayed` (the
+migrations README has the queries). Rewinding the group to the offsets also works (see the [cheatsheet](cheatsheet.md#consumer-group-offsets)).
 A log is not a queue: if you need records kept and re-readable independent of container logs, copy them to a Kafka
 topic from `direct:deadLetter`.
 
@@ -242,8 +257,8 @@ Two scripts, both against the local cluster; `test-consumer.sh` uses a **throwaw
 
 | Script | What it proves | Time |
 |---|---|---|
-| `./scripts/test-consumer.sh` | 37 checks. Chat, non-chat, duplicate and conflicting events; summary counts; 19 dead-lettered records, each with its exact reason (17 poison, and 2 that the store refuses: a NUL in a text and in a jsonb); a tombstone; no lag (no poison record blocks a partition); an unreachable database is retried, not dead-lettered, and recovers; an unexpected error is dead-lettered after 3 retries. | about 1.5 min |
-| `./scripts/test-camel.sh consumer` | 80 JUnit tests: the decoder at the edges of every field (65, against the real Schema Registry), and routes 2 and 3 on the real Postgres (15: stored, duplicate, conflict, NUL, a million characters, 16 threads on one event, 30 on one conversation). About 25 s. | |
+| `./scripts/test-consumer.sh` | 46 checks. Chat, non-chat, duplicate and conflicting events; summary counts; 19 dead-lettered records, each with its exact reason (17 poison, and 2 that the store refuses: a NUL in a text and in a jsonb); a tombstone; no lag (no poison record blocks a partition); an unreachable database is retried, not dead-lettered, and recovers; an unexpected error is dead-lettered after 3 retries. | about 1.5 min |
+| `./scripts/test-camel.sh consumer` | 95 JUnit tests: the decoder at the edges of every field (65, against the real Schema Registry), and routes 2 and 3 on the real Postgres (15: stored, duplicate, conflict, NUL, a million characters, 16 threads on one event, 30 on one conversation). About 25 s. | |
 
 `test-consumer.sh` touches only the rows whose conversation id starts with `t-` (it deletes them before and after), and the JUnit tests only rows keyed `jt-`.
 Neither writes to the real topic, to `camel_history` or to any other schema.

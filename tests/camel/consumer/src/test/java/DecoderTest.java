@@ -1,3 +1,4 @@
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -5,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -549,14 +551,71 @@ class DecoderTest {
     }
 
     @Test
-    void theDeadLetterTextShowsTheHeaderBytesAndCutsAHugeRecord() throws Exception {
-        Exchange exchange = decoded(event());
-        String shown = exchange.getProperty("rawText", String.class);
-
-        assertTrue(shown.startsWith("\\x00\\x00\\x00\\x00\\x02{"), shown.substring(0, 30));
+    void theDeadLetterTextShowsTheHeaderBytesAndCutsAHugeRecord() {
+        assertEquals("\\x00\\x00\\x00\\x00\\x02{", ConversationEventDecoder.printable(new byte[] {0, 0, 0, 0, 2, '{'}));
         assertTrue(ConversationEventDecoder.printable(new byte[40_000]).length() < 70_000);
         assertTrue(ConversationEventDecoder.printable("x".repeat(40_000).getBytes(StandardCharsets.UTF_8)).contains("...(truncated, 40000 chars)"));
         assertEquals("", ConversationEventDecoder.printable(null));
+    }
+
+    @Test
+    void theRecordIsKeptExactlyAsItCameForTheDeadLetterTable() throws Exception {
+        byte[] value = framed(event());
+        byte[] key = {0, 0, 0, 0, 1, '{', (byte) 0xff, 0, '}'};
+        Exchange exchange = exchange(value);
+        exchange.getMessage().setHeader("CamelKafkaKey", key);
+
+        decoder.decode(exchange);
+
+        assertArrayEquals(value, exchange.getProperty("rawValueBytes", byte[].class));
+        assertArrayEquals(key, exchange.getProperty("rawKeyBytes", byte[].class));
+    }
+
+    @Test
+    void aPoisonRecordIsKeptToo() {
+        byte[] garbage = {0, 0, 0, 0, 2, '{', (byte) 0xff, 0, '}'};
+        Exchange exchange = exchange(garbage);
+
+        assertThrows(PoisonRecordException.class, () -> decoder.decode(exchange));
+
+        assertArrayEquals(garbage, exchange.getProperty("rawValueBytes", byte[].class));
+    }
+
+    @Test
+    void aKeyThatArrivedAsTextBecomesItsUtf8Bytes() throws Exception {
+        Exchange exchange = exchange(framed(event()));
+        exchange.getMessage().setHeader("CamelKafkaKey", "clave-\u00e9");
+
+        decoder.decode(exchange);
+
+        assertArrayEquals("clave-\u00e9".getBytes(StandardCharsets.UTF_8), exchange.getProperty("rawKeyBytes", byte[].class));
+    }
+
+    @Test
+    void noKeyIsNoBytes() throws Exception {
+        Exchange exchange = exchange(framed(event()));
+
+        decoder.decode(exchange);
+
+        assertNull(exchange.getProperty("rawKeyBytes"));
+    }
+
+    @Test
+    void theKafkaHeadersAreKeptAsJsonWithoutCamelsOwnAndWithoutALossyByte() throws Exception {
+        Exchange exchange = exchange(framed(event()));
+        exchange.getMessage().setHeader("source", "agent".getBytes(StandardCharsets.UTF_8));
+        exchange.getMessage().setHeader("binary", new byte[] {(byte) 0xff, 0x01});
+        exchange.getMessage().setHeader("withnul", new byte[] {'a', 0, 'b'});
+        exchange.getMessage().setHeader("CamelSomething", "internal");
+
+        decoder.decode(exchange);
+
+        JsonNode headers = JSON.readTree(exchange.getProperty("rawHeaders", String.class));
+        assertEquals("agent", headers.get("source").asText());
+        assertEquals("base64:/wE=", headers.get("binary").asText());
+        assertEquals("base64:YQBi", headers.get("withnul").asText(), "a NUL cannot go in jsonb, so the header is kept as base64");
+        assertNull(headers.get("CamelSomething"));
+        assertNull(headers.get("CamelKafkaTopic"));
     }
 
     @Test

@@ -14,7 +14,8 @@ New here? Read Level 1, then the vocabulary. Debugging? Level 2 and the sequence
 | **event** | The conversation fact inside a record (`UserMessageSent`, ...). |
 | **tombstone** | A record with an empty value. Skipped. |
 | **poison record** | A record that can never be stored: it breaks the schema or the contract, or the database refuses it. |
-| **dead-letter log** | Where poison and unexpected records are written: logger `dlq`, `ERROR`, with the body. "DLQ" is only the prefix of its lines. |
+| **dead-letter table** | `dead_letter.dead_letters`, shared by every consumer: where poison and unexpected records are written, exactly as they came. |
+| **dead-letter log** | One `ERROR` line per dead letter on logger `dlq`, without the record. "DLQ" is only the prefix of its lines. |
 | **outcome** | What route 2 decided: `stored`, `duplicate`, or a refused conflict. |
 
 ## Legend
@@ -41,7 +42,7 @@ flowchart LR
     consumer["History consumer<br/>this project, on Camel"]
     registry(["Schema Registry<br/>the schema of each record"])
     db[("Postgres, schema history<br/>inbox, messages, summaries")]
-    dlq[/"Dead-letter log<br/>logger dlq"/]
+    dlq[("Dead-letter table<br/>dead_letter.dead_letters")]
 
     producer -- "1 publishes records" --> topic
     topic -- "2 delivers records" --> consumer
@@ -51,7 +52,7 @@ flowchart LR
 ```
 
 *In words:* the agent and Debezium publish records to a Kafka topic. The consumer reads them, reads each schema from the
-registry once, writes the events to three Postgres tables, and writes any record it cannot store to the dead-letter log.
+registry once, writes the events to three Postgres tables, and writes any record it cannot store to the dead-letter table.
 The original service, `ms-ml-conv-history-bs`, reads the same topic as another consumer group and would write the same tables:
 the consumer of `ms-ml-camel-conv-history-bs` uses its own schema, `camel_history`, so the consumers never compete.
 
@@ -149,7 +150,9 @@ the outcome and control returns to route 1.
 | Step | What | Why |
 |---|---|---|
 | 3.1 Name the reason if none | An unexpected error gets its exception class (`field=`) and message (`detail=`). | Poison and refused records already have theirs. |
-| 3.2 Write the dead-letter log | One `ERROR` line on logger `dlq`: reason, field, topic, partition, offset, key, detail, body. | The record can be found and replayed. |
+| 3.2 Prepare the row | Builds the row's parameters from what the decoder kept: the original key, value and Kafka headers, the coordinates, the reason, the attempt. Texts lose any NUL. | The row is always accepted. |
+| 3.3 Write the dead letter | One `INSERT` into `dead_letter.dead_letters`, `ON CONFLICT DO NOTHING`. | The record is kept as it came and can be replayed; a retry is harmless; if the insert fails the record is read again. |
+| 3.4 Write the dead-letter log | One `ERROR` line on logger `dlq`: reason, field, topic, partition, offset, key, detail. | A line to grep. The record is in the table, not here. |
 
 ---
 
@@ -161,7 +164,7 @@ sequenceDiagram
     participant R as 1 Receive
     participant S as 2 Store
     participant P as Postgres
-    participant L as 3 Dead-letter log
+    participant L as 3 Dead-letter table
 
     K->>R: record
     R->>R: 1.1 decode and validate
@@ -173,13 +176,13 @@ sequenceDiagram
         S-->>R: stored or duplicate
         R-->>K: route 1 returns, so the Kamelet commits the offset
     else a poison record
-        R-)L: 3.2 write the record
+        R->>L: 3.3 write the dead letter
         R-->>K: route 1 returns, so the Kamelet commits the offset
     end
 ```
 
 *In words:* a valid record is stored through route 2 and its offset committed. A poison record is written to the
-dead-letter log and its offset committed all the same. A failure that is **not** the record's fault (database or registry
+dead-letter table and its offset committed all the same. A failure that is **not** the record's fault (database or registry
 unreachable) takes neither path: the record is retried in place, and its offset does not move.
 
 ---
@@ -197,7 +200,7 @@ Reading the Designer? Find the step; the **Docs:** line of its note points to th
 | 2.1 Write | One statement, one transaction | [The store](conv-history-consumer.md#the-store-one-statement-one-transaction) |
 | 2.2 Decide the outcome | stored, duplicate or conflict | [What happens to each kind of record](conv-history-consumer.md#what-happens-to-each-kind-of-record) |
 | Error rules (`errorRules`) | Poison, refused, dependency down, unexpected | same |
-| 3.1 and 3.2 | Name the reason, write the log | [The dead-letter log](conv-history-consumer.md#the-dead-letter-log) |
+| 3.1 to 3.4 | Name the reason, prepare the row, write the dead letter, write the log | [The dead-letter table](conv-history-consumer.md#the-dead-letter-table) |
 | Any pattern name | What the pattern is | [Pattern map](#pattern-map) |
 
 ## Pattern map
@@ -229,7 +232,7 @@ The idempotency is the database key `(conversation_id, sequence)`, not Camel's `
 - **Small beans where YAML would be unclear**, each registered with `@BindToRegistry`.
 - **A Kamelet for what every consumer shares**: how a topic is read and when its offset moves ([below](#the-kamelet-and-how-to-add-another-consumer)).
 - **Commit after handling, never before:** manual commit, at-least-once, an idempotent store.
-- **A dedicated logger for the dead-letter log**, and health and metrics on.
+- **The dead letters in a table, the log without the record**: a poison record is data, and the table gives it access control, retention and a replay.
 
 ---
 

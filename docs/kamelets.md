@@ -40,7 +40,7 @@ your steps should tolerate seeing a record twice (the store here does: the inbox
 | **Throws and nothing handles it** | **Does not commit and reads the same record again, over and over; every record behind it waits.** Measured: three deliveries of the failed record in seven seconds, offset stuck at it, the next record never delivered |
 
 The last row is the one to remember: **every consumer must decide what a bad record becomes.** This project's `errorRules` and route 3
-(a dead-letter log) do that; a consumer without such a rule blocks its partition on the first record it cannot handle.
+(a dead-letter table and a log line) do that; a consumer without such a rule blocks its partition on the first record it cannot handle.
 
 ## Parameters
 

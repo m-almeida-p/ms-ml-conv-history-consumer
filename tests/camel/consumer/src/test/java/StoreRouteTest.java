@@ -42,6 +42,7 @@ class StoreRouteTest {
     private static ConversationEventDecoder decoder;
     private final AtomicInteger commits = new AtomicInteger();
     private final AtomicInteger offset = new AtomicInteger();
+    private byte[] lastValue;
 
     @BeforeAll
     static void boot() throws Exception {
@@ -54,9 +55,12 @@ class StoreRouteTest {
         main.bind("pgDataSource", db);
         main.bind("storeOutcome", new StoreOutcome());
         main.bind("storeRefusal", new StoreRefusal());
+        main.bind("deadLetterRecord", new DeadLetterRecord());
         main.bind("decoder", decoder);
         main.addInitialProperty("app.schema.registryUrl", System.getenv().getOrDefault("REGISTRY_URL", "http://schema-registry:8081"));
         main.addInitialProperty("app.schema.allowedIds", "2");
+        main.addInitialProperty("app.kafka.groupId", "jt-service");
+        main.addInitialProperty("app.unexpected.maxRetries", "3");
         main.addInitialProperty("app.schema.requireFraming", "true");
         main.configure().withRoutesIncludePattern("file:../../../ms-ml-conv-history-consumer/store-conversation-history.camel.yaml,file:../../../ms-ml-conv-history-consumer/handle-errors-and-dead-letters.camel.yaml");
         main.start();
@@ -80,6 +84,7 @@ class StoreRouteTest {
         sql("DELETE FROM conversation_inbox WHERE conversation_id LIKE 'jt-%'");
         sql("DELETE FROM conversation_messages WHERE conversation_id LIKE 'jt-%'");
         sql("DELETE FROM conversation_summaries WHERE conversation_id LIKE 'jt-%'");
+        sql("DELETE FROM dead_letter.dead_letters WHERE service = 'jt-service'");
     }
 
     private static void sql(String statement) throws Exception {
@@ -122,6 +127,7 @@ class StoreRouteTest {
         byte[] value = new byte[5 + json.length];
         ByteBuffer.wrap(value).putInt(1, 2);
         System.arraycopy(json, 0, value, 5, json.length);
+        lastValue = value;
         Exchange exchange = main.getCamelContext().getEndpoint("direct:store").createExchange();
         exchange.getMessage().setBody(value);
         exchange.getMessage().setHeader("CamelKafkaTopic", "jt-topic");
@@ -346,5 +352,108 @@ class StoreRouteTest {
         assertEquals("30", one("SELECT message_count FROM conversation_summaries WHERE conversation_id = 'jt-15'"), "no lost update on the summary");
         assertEquals(30, count("conversation_messages", "jt-15"));
         assertNull(one("SELECT 1 FROM conversation_summaries WHERE conversation_id = 'jt-15' AND first_occurred_at > last_occurred_at"));
+    }
+
+    // ---- the dead-letter table ----------------------------------------------------------------------------------------------
+
+    private static String hex(byte[] bytes) {
+        return java.util.HexFormat.of().formatHex(bytes);
+    }
+
+    /** What route 1's error rules do: decode, and when the record is refused (or fails), call route 3. Returns the exchange after it. */
+    private Exchange deadLetter(byte[] key, byte[] value, int partition, long recordOffset, Throwable caught, int redeliveries) {
+        Exchange exchange = main.getCamelContext().getEndpoint("direct:deadLetter").createExchange();
+        exchange.getMessage().setBody(value);
+        exchange.getMessage().setHeader("CamelKafkaTopic", "jt-topic");
+        exchange.getMessage().setHeader("CamelKafkaPartition", partition);
+        exchange.getMessage().setHeader("CamelKafkaOffset", recordOffset);
+        exchange.getMessage().setHeader("CamelKafkaTimestamp", 1_760_000_000_000L);
+        if (key != null) {
+            exchange.getMessage().setHeader("CamelKafkaKey", key);
+        }
+        exchange.getMessage().setHeader("source", "agent".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            decoder.decode(exchange);
+        } catch (PoisonRecordException refused) {
+            exchange.setProperty(Exchange.EXCEPTION_CAUGHT, refused);
+        }
+        if (caught != null) {
+            exchange.setProperty(Exchange.EXCEPTION_CAUGHT, caught);
+        }
+        if (redeliveries > 0) {
+            exchange.getMessage().setHeader(Exchange.REDELIVERY_COUNTER, redeliveries);
+        }
+        return template.send("direct:deadLetter", exchange);
+    }
+
+    private static String deadLetter(String column, long recordOffset) throws Exception {
+        return one("SELECT " + column + " FROM dead_letter.dead_letters WHERE service = 'jt-service' AND source_offset = " + recordOffset);
+    }
+
+    @Test
+    void aRefusedRecordIsStoredExactlyAsItCameWithWhereItWas() throws Exception {
+        byte[] key = {0, 0, 0, 0, 1, '{', (byte) 0xff, 0, '}'};
+        byte[] value = {0, 0, 0, 0, 2, '{', (byte) 0xff, 0, '}'};   // a NUL and a byte that is not UTF-8: refused, and must come back as is
+
+        Exchange done = deadLetter(key, value, 3, 7001L, null, 0);
+
+        assertNull(done.getException(), "writing the dead letter must not fail");
+        assertEquals(hex(value), deadLetter("encode(record_value, 'hex')", 7001));
+        assertEquals(hex(key), deadLetter("encode(record_key, 'hex')", 7001));
+        assertEquals("jt-topic", deadLetter("source_topic", 7001));
+        assertEquals("3", deadLetter("source_partition", 7001));
+        assertEquals(String.valueOf(done.getProperty("dlqReason")), deadLetter("reason", 7001));
+        assertEquals("1", deadLetter("attempt", 7001));
+        assertEquals("open", deadLetter("status", 7001));
+        assertEquals("agent", deadLetter("headers ->> 'source'", 7001));
+        assertEquals("1760000000000", deadLetter("(extract(epoch from source_timestamp) * 1000)::bigint", 7001));
+    }
+
+    @Test
+    void theSameRecordTwiceLeavesOneRow() throws Exception {
+        byte[] value = {0, 0, 0, 0, 2, '{', '}'};
+
+        deadLetter(null, value, 0, 7002L, null, 0);
+        Exchange again = deadLetter(null, value, 0, 7002L, null, 0);
+
+        assertNull(again.getException(), "a retry after the insert succeeded must not fail");
+        assertEquals("1", one("SELECT count(*) FROM dead_letter.dead_letters WHERE service = 'jt-service' AND source_offset = 7002"));
+        assertNull(deadLetter("record_key", 7002), "a record with no key has a NULL key");
+    }
+
+    @Test
+    void aRecordTheStoreRefusesKeepsTheOriginalBytesNotTheDecodedEvent() throws Exception {
+        receive(user("jt-nul-dl", 1, "before\u0000after"));
+
+        String reason = one("SELECT reason FROM dead_letter.dead_letters WHERE service = 'jt-service'");
+        assertEquals("store-rejected", reason);
+        assertTrue(one("SELECT field FROM dead_letter.dead_letters WHERE service = 'jt-service'").startsWith("sqlstate-22"));
+        assertEquals(hex(lastValue), one("SELECT encode(record_value, 'hex') FROM dead_letter.dead_letters WHERE service = 'jt-service'"),
+                "the row holds what Kafka delivered, not the event the decoder built from it");
+        assertEquals("1", one("SELECT count(*) FROM dead_letter.dead_letters WHERE service = 'jt-service'"));
+    }
+
+    @Test
+    void anUnexpectedErrorRecordsItsClassItsAttemptsAndAMessageWithoutANul() throws Exception {
+        byte[] value = framedValid("jt-unexpected-dl");
+
+        Exchange done = deadLetter(null, value, 1, 7003L, new IllegalStateException("boom \u0000 now"), 3);
+
+        assertNull(done.getException());
+        assertEquals("unexpected", deadLetter("reason", 7003));
+        assertEquals("IllegalStateException", deadLetter("field", 7003));
+        assertEquals("boom  now", deadLetter("detail", 7003));
+        assertEquals("java.lang.IllegalStateException", deadLetter("exception_class", 7003));
+        assertEquals("4", deadLetter("attempt", 7003), "app.unexpected.maxRetries is 3: the record was tried 4 times");
+        assertEquals(hex(value), deadLetter("encode(record_value, 'hex')", 7003), "a valid record that failed is also kept as it came");
+    }
+
+    /** A valid framed record, as the Kafka endpoint would hand it over. */
+    private byte[] framedValid(String conversation) throws Exception {
+        byte[] json = JSON.writeValueAsBytes(user(conversation, 1, "hola"));
+        byte[] value = new byte[5 + json.length];
+        ByteBuffer.wrap(value).putInt(1, 2);
+        System.arraycopy(json, 0, value, 5, json.length);
+        return value;
     }
 }
