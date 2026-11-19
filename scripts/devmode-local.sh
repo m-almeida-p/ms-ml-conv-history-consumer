@@ -47,6 +47,11 @@ mkdir -p "${work}"
 cp -R "${src}/." "${work}/"
 # Karavan's files for its Deploy feature, not routes: Karavan does not hand them to DevMode either.
 rm -f "${work}/docker-compose.yaml" "${work}/PROJECT.md"
+# Custom Kamelets live in the repo's kamelets/ folder (Karavan's "Custom Kamelets" project). Karavan copies into a run the ones the
+# project's routes use (uri: kamelet:<name>); do the same here.
+for kamelet in $(grep -hoE 'uri: *kamelet:[A-Za-z0-9._-]+' "${src}"/*.yaml 2>/dev/null | sed -E 's/.*kamelet://' | sort -u); do
+  [ -f "${REPO_DIR}/kamelets/${kamelet}.kamelet.yaml" ] && cp "${REPO_DIR}/kamelets/${kamelet}.kamelet.yaml" "${work}/" && echo "    kamelet: ${kamelet}"
+done
 chmod -R a+rwX "${work}"
 
 env_args=()

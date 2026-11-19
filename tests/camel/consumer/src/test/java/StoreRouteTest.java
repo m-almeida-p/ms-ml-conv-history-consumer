@@ -53,7 +53,6 @@ class StoreRouteTest {
         main = new Main();
         main.bind("pgDataSource", db);
         main.bind("storeOutcome", new StoreOutcome());
-        main.bind("offsetCommit", new OffsetCommit());
         main.bind("storeRefusal", new StoreRefusal());
         main.bind("decoder", decoder);
         main.addInitialProperty("app.schema.registryUrl", System.getenv().getOrDefault("REGISTRY_URL", "http://schema-registry:8081"));
@@ -154,7 +153,7 @@ class StoreRouteTest {
         assertEquals(1, count("conversation_inbox", "jt-1"));
         assertEquals("hola|appUser|jt-acct", one("SELECT text || '|' || role || '|' || author_id FROM conversation_messages WHERE conversation_id = 'jt-1'"));
         assertEquals("1", one("SELECT message_count FROM conversation_summaries WHERE conversation_id = 'jt-1'"));
-        assertEquals(0, commits.get(), "route 2 does not commit: route 1 does, after it");
+        assertEquals(0, commits.get(), "route 2 does not commit: the Kamelet source does, when the route returns");
     }
 
     @Test
@@ -176,7 +175,7 @@ class StoreRouteTest {
 
         assertEquals("store-rejected", clash.getProperty("dlqReason"));
         assertEquals("stream-position", clash.getProperty("dlqField"));
-        assertEquals(1, commits.get(), "dead-lettered, so its offset moves");
+        assertEquals(0, commits.get(), "route 3 does not commit either: the Kamelet source does, when the route returns (test-consumer.sh checks there is no lag)");
         assertEquals("original", one("SELECT text FROM conversation_messages WHERE conversation_id = 'jt-3'"));
     }
 
@@ -248,7 +247,7 @@ class StoreRouteTest {
 
         assertEquals("store-rejected", refused.getProperty("dlqReason"));
         assertTrue(String.valueOf(refused.getProperty("dlqField")).startsWith("sqlstate-22"), String.valueOf(refused.getProperty("dlqField")));
-        assertEquals(1, commits.get(), "the offset moves: one such message must not block its partition");
+        assertEquals(0, commits.get(), "dead-lettered, and no route commits: the Kamelet source does, so a refused message cannot block its partition");
         assertEquals(0, count("conversation_inbox", "jt-9"));
         assertEquals(0, count("conversation_messages", "jt-9"));
         assertEquals(0, count("conversation_summaries", "jt-9"));
@@ -259,7 +258,7 @@ class StoreRouteTest {
         Exchange refused = receive(event("jt-10", 1, "ToolCallSummary", "{\"tool\":\"a\\u0000b\"}"));
 
         assertEquals("store-rejected", refused.getProperty("dlqReason"));
-        assertEquals(1, commits.get());
+        assertEquals(0, commits.get(), "no route commits");
         assertEquals(0, count("conversation_inbox", "jt-10"));
     }
 

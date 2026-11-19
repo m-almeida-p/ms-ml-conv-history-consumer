@@ -157,7 +157,7 @@ When you create a project, Karavan adds template files. For
 |---|---|
 | `application.properties` | Camel settings, dependencies, the datasource. Changed from the template; see the [consumer guide](conv-history-consumer.md#applicationproperties-changes-from-the-template). |
 | `consume-conversation-events.camel.yaml`, `store-conversation-history.camel.yaml`, `handle-errors-and-dead-letters.camel.yaml` | The three routes: Receive, Store, Dead-letter (with the error rules). |
-| `*.java` | Small Java helpers (decoder, store outcome, offset commit, store refusal). Karavan keeps `.java` files in the project like any other file, and DevMode compiles them at startup. |
+| `*.java` | Small Java helpers (decoder, store outcome, poison exception, store refusal). Karavan keeps `.java` files in the project like any other file, and DevMode compiles them at startup. |
 | `docker-compose.yaml` | Karavan reads it when it runs the project: the published port (8087) and the container name. The port must be plain `host:container`: Karavan's parser fails on `127.0.0.1:8087:8080` and Run does nothing. Edit the port here, then recreate the container. |
 | `PROJECT.md` | The route table, the key and the file list of the project, shown with it in Karavan (excluded from the run by `camel.jbang.excludes=*.md`). |
 

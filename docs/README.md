@@ -22,6 +22,8 @@ Guides for the Apache Camel Karavan setup in this repository and for the Kafka c
 │                               the tests (test-consumer.sh, test-camel.sh for the JUnit, test-all.sh runs them all),
 │                               check-docs.py and scan-secrets.sh (run it before every push)
 ├── ms-ml-conv-history-consumer/      The Karavan project: the Kafka consumer that builds the conversation history
+├── kamelets/                         Karavan's "Custom Kamelets" project: kafka-at-least-once-source, reusable by every consumer
+├── kamelets/                   Karavan's "Custom Kamelets" project: kafka-at-least-once-source, reused by every consumer
 ├── tests/camel/consumer/       The JUnit module: it compiles the project's own Java files
 └── docs/                       This documentation
 ```
@@ -29,7 +31,7 @@ Guides for the Apache Camel Karavan setup in this repository and for the Kafka c
 Not in Git: `.env` (secrets), `.test-logs/` (the output of `test-all.sh`), `.devmode-local/` (working copies of the local runner) and
 `temp/` (working notes).
 
-The folder `ms-ml-conv-history-consumer/` is one Karavan *project*. Karavan commits to this same Git repository, so the project is never lost
+The folders `ms-ml-conv-history-consumer/` and `kamelets/` are Karavan *projects*. Karavan commits to this same Git repository, so the project is never lost
 when the local containers are removed.
 
 ## Conventions used in these guides

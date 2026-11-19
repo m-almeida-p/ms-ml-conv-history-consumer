@@ -1,0 +1,73 @@
+apiVersion: camel.apache.org/v1
+kind: Kamelet
+metadata:
+  name: kafka-at-least-once-source
+  annotations:
+    camel.apache.org/kamelet.support.level: Preview
+    camel.apache.org/provider: Yape
+    camel.apache.org/kamelet.group: Kafka
+  labels:
+    camel.apache.org/kamelet.type: source
+spec:
+  definition:
+    title: Kafka at-least-once source
+    description: >-
+      Reads one record at a time from a Kafka topic and commits its offset only after the route that
+      uses this source has finished with it (stored, skipped or dead-lettered), so a record that was
+      not handled is never covered by a later commit. If the route retries forever (a dependency is
+      down), the offset does not move. The message body is the raw record (bytes), the key and the
+      Kafka headers are kept. Auto commit is off; the commit is done here, so a route that uses this
+      source needs no commit step of its own.
+    required:
+      - topic
+      - brokers
+      - groupId
+    type: object
+    properties:
+      topic:
+        title: Topic
+        description: The topic to read.
+        type: string
+      brokers:
+        title: Brokers
+        description: Kafka bootstrap servers, host:port, comma separated.
+        type: string
+      groupId:
+        title: Consumer group
+        description: The consumer group. Use one group per consumer; two projects in one group split the partitions between them.
+        type: string
+      autoOffsetReset:
+        title: Where to start
+        description: Where a group with no committed offset starts. earliest reads the topic from its beginning.
+        type: string
+        default: earliest
+        enum:
+          - earliest
+          - latest
+  types:
+    out:
+      mediaType: application/octet-stream
+  dependencies:
+    - camel:kafka
+  template:
+    from:
+      id: fromKafka
+      uri: kafka
+      parameters:
+        topic: "{{topic}}"
+        brokers: "{{brokers}}"
+        groupId: "{{groupId}}"
+        autoOffsetReset: "{{autoOffsetReset}}"
+        autoCommitEnable: false
+        allowManualCommit: true
+        breakOnFirstError: true
+        valueDeserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      steps:
+        - to:
+            id: toRoute
+            uri: kamelet:sink
+        - script:
+            id: commitOffset
+            expression:
+              simple:
+                expression: "${header.CamelKafkaManualCommit.commit()}"

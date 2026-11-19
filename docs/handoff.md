@@ -21,15 +21,20 @@ Microsoft Foundry**: no sync project, no API project, no token broker. The behav
 | Consumer group | `ms-ml-camel-conv-history-bs` | `ms-ml-conv-history-consumer`, so it never competes with the consumer of the other repository. A new group starts at the beginning of the topic; that is safe, the inbox refuses a duplicate |
 | Compose and `.env` | Karavan, its database, the registry **and** the Foundry token broker | Karavan, its database and the registry |
 | Scripts and docs | all three projects, Foundry, the fake Foundry, oracle, parity check, mutation experiment | the consumer's only |
+| Kafka reading and commit (branch `kamelets`) | In route 1, with a commit step 1.3 and another in route 3 (3.3) | In the Kamelet `kafka-at-least-once-source`; the project has no commit step. Steps 1.3 and 3.3 no longer exist |
 
 Not copied on purpose: `parity-check.sh` (compares with the Go consumer's tables and empties `camel_history`) and the mutation experiment
 (its consumer mutations are in the original repository's `tests/mutation/`).
 
 ## Status
 
-The repository is a first commit: the files are a copy plus the renames above. Whether the copy builds and passes is in the last section
-of [testing.md](testing.md#last-run). There is **no GitHub remote yet**: create `m-almeida-p/ms-ml-conv-history-consumer`, set
-`KARAVAN_GIT_REPOSITORY` in `.env`, and push, because Karavan reads its projects from GitHub.
+| | |
+|---|---|
+| GitHub | `m-almeida-p/ms-ml-conv-history-consumer`. `main` is the **plain-routes version** (the consumer reads Kafka itself); the tag **`backup-before-kamelets`** points at it |
+| Branch `kamelets` | The consumer starts from the Kamelet `kamelets/kafka-at-least-once-source.kamelet.yaml`, which reads the topic and commits the offset after the route. Same behaviour: all 37 system checks and the 80 JUnit tests pass ([testing.md](testing.md#last-run)). **Not merged into `main` yet** |
+| Karavan | `consumer-karavan` on `http://localhost:9997`, reading this repository with the same token as the other stack |
+
+**To go back to the plain routes:** `git checkout main` (or `git reset --hard backup-before-kamelets`), then Pull in Karavan.
 
 ## Is it healthy? (one minute)
 
@@ -99,7 +104,7 @@ It is a local PoC and says so. Known, accepted by the owner:
 
 | # | What | Notes |
 |---|---|---|
-| 1 | The repository has no remote | Create it, set `KARAVAN_GIT_REPOSITORY`, push |
+| 1 | The Kamelet branch is not merged | Run it in Karavan (Pull the branch, Run) before merging to `main`; see [karavan-setup.md](karavan-setup.md) |
 | 2 | Rule for Kafka commit failures | `CommitFailedException` and `RebalanceInProgressException` are in no `onException` rule, so one would be dead-lettered as `unexpected`. Add a rule that ignores them (the record redelivers); not done because it could not be provoked to test |
 | 3 | Dependency audit | `postgresql` is declared at 42.7.12; at run time Camel's downloader also puts 42.7.13 on the classpath (which one loads was not determined). HikariCP 6.2.1 and json-schema-validator 1.5.6 have newer **major** versions that were not taken. No scan tool was run |
 | 4 | The owner's migrations `000001`-`000004` | Uncommitted in the producer repo. The tables here depend on them |

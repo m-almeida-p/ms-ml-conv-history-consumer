@@ -38,7 +38,7 @@ One Maven module, run in a Maven container on the cluster network (`maven:3.9-ec
 | `DecoderTest` | The decoder at the edge of every field, against the real Schema Registry (read only); tombstones |
 | `StoreRouteTest` | Routes 2 and 3 with their real error rules on the cluster's Postgres: stored, duplicate, conflict, a NUL (refused for good), a million characters, 16 threads on one event, 30 on one conversation |
 
-**What the JUnit tests do not cover:** route 1 (the Kafka subscription and the offset commit). `test-consumer.sh` does.
+**What the JUnit tests do not cover:** route 1 and the Kamelet (the Kafka subscription and the offset commit). `test-consumer.sh` does: it runs the project with its Kamelet, as Karavan does. The route tests assert that routes 2 and 3 do **not** commit, because the Kamelet does.
 
 ## `test-consumer.sh`
 
@@ -57,11 +57,15 @@ retries. It touches only rows whose conversation id starts with `t-`.
 
 ## Last run
 
-2026-11-19, on the copy as committed: **all 3 suites green**. `check-docs.py`: 16 pointers, 46 links, 26 labels, 5 diagrams. JUnit: **80 tests**
+2026-11-19, on the plain-routes version (tag `backup-before-kamelets`): **all 3 suites green**. `check-docs.py`: 16 pointers, 46 links, 26 labels, 5 diagrams. JUnit: **80 tests**
 (`DecoderTest` 65, `StoreRouteTest` 15). `test-consumer.sh`: all checks passed (about 2 minutes). The consumer's copy of the test that kept the sync's
 and the consumer's decoder identical was removed, because the sync is not in this repository.
 
 Rerun after the project folder was renamed to `ms-ml-conv-history-consumer` and the ports and names were made unique: still all green.
 The new Karavan stack was started next to the other one (UI 9997 and 9998 both answer, every container name resolves to one container).
+
+Branch `kamelets` (the consumer starts from the Kamelet `kafka-at-least-once-source`), 2026-11-19: **all 3 suites green again**: docs check, 80 JUnit tests,
+and all 37 system checks of `test-consumer.sh`, including the commit behaviour (an outage leaves the offset uncommitted, recovery commits it, poison and
+unexpected records are committed). Route 3 lost its commit step, so the JUnit assertions that counted commits there now assert zero.
 
 Not run here: the consumer under Karavan (`Run` in the UI) from this repository, because it has no GitHub remote yet.

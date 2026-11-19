@@ -6,18 +6,13 @@
     routeConfigurationId: errorRules
     from:
       id: fromEventsTopic
-      description: Topic (Event-Driven Consumer)
-      note: "Reads {{app.topic}} as group {{app.kafka.groupId}}. Auto commit is off. Docs: conv-history-consumer.md > Settings."
-      uri: kafka
+      description: Topic (Kamelet source)
+      note: "Reads {{app.topic}} as group {{app.kafka.groupId}} with the Kamelet kafka-at-least-once-source, which also commits the offset when this route is done with the record. Docs: conv-history-consumer.md > Settings."
+      uri: kamelet:kafka-at-least-once-source
       parameters:
         topic: "{{app.topic}}"
         brokers: "{{app.kafka.brokers}}"
         groupId: "{{app.kafka.groupId}}"
-        autoOffsetReset: earliest
-        autoCommitEnable: false
-        allowManualCommit: true
-        breakOnFirstError: true
-        valueDeserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
       steps:
         - bean:
             id: decodeRecord
@@ -50,9 +45,3 @@
                     uri: direct
                     parameters:
                       name: store
-        - bean:
-            id: commitOffset
-            description: 1.3 Commit (Guaranteed Delivery)
-            note: "The offset moves only now. After a crash the record comes back and step 2.1 ignores the repeat. Docs: conv-history-consumer.md > What happens to each kind of record."
-            ref: offsetCommit
-            method: commit

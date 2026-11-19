@@ -15,11 +15,14 @@ The Karavan project is the folder [`ms-ml-conv-history-consumer/`](ms-ml-conv-hi
 
 | File | Task | Route |
 |---|---|---|
-| `consume-conversation-events.camel.yaml` | Read a record from Kafka, decode and validate it, hand it on, commit the offset | 1 Receive |
+| `consume-conversation-events.camel.yaml` | Start from the Kamelet source, decode and validate the record, hand it on | 1 Receive |
 | `store-conversation-history.camel.yaml` | Write the event to the three tables in one statement (**the store route**) | 2 Store |
 | `handle-errors-and-dead-letters.camel.yaml` | The error rules, and the dead-letter log for records that can never be stored | 3 Dead-letter |
-| `*.java` | The decoder, the store outcome, the offset commit, the poison exception, the store refusal | |
+| `*.java` | The decoder, the store outcome, the poison exception, the store refusal | |
 | `application.properties` | Settings (`app.*`), dependencies, datasource | |
+
+The Kafka reading and the offset commit are not in the project: they are in the **Kamelet** [`kamelets/kafka-at-least-once-source.kamelet.yaml`](kamelets/kafka-at-least-once-source.kamelet.yaml), which every consumer can reuse
+([how](docs/design.md#the-kamelet-and-how-to-add-another-consumer)).
 
 Route 2 cannot be reached without route 1 (the only caller) and route 3 (where a record it refuses goes), so the three stay together.
 

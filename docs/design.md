@@ -92,7 +92,7 @@ flowchart LR
     r12{"1.2 Route (Content-Based Router)"}
     r121["1.2.1 Skip tombstone"]
     r2["2 Store"]
-    r13["1.3 Commit (Guaranteed Delivery)"]
+    r13(["Kamelet commits the offset"])
     r3["3 Dead-letter"]
 
     topic -- "record" --> r11
@@ -106,7 +106,7 @@ flowchart LR
 ```
 
 *In words:* route 1 decodes and validates a record (1.1). A tombstone is skipped; any other record goes to route 2 to be
-stored. Then the offset is committed (1.3). A record that fails validation, or that route 2 cannot store, goes to route 3
+stored. When the route returns, the Kamelet source commits the offset. A record that fails validation, or that route 2 cannot store, goes to route 3
 instead (dashed).
 
 | Route | File | Called by |
@@ -128,7 +128,7 @@ flowchart LR
     pg[("Postgres<br/>schema camel_history")]
     s22{"2.2 Decide the outcome"}
     s23[/"2.3 Log the outcome"/]
-    out(["back to step 1.3"])
+    out(["back to route 1"])
     r3["3 Dead-letter"]
 
     in -- "event" --> s21
@@ -142,7 +142,7 @@ flowchart LR
 
 *In words:* step 2.1 writes the event with one SQL statement. Step 2.2 reads what it returned: stored, duplicate, or a
 different event already holds that position. A conflict, or data the database refuses, goes to route 3. Otherwise 2.3 logs
-the outcome and control returns to 1.3.
+the outcome and control returns to route 1.
 
 ### Route 3: a record that cannot be stored
 
@@ -150,7 +150,6 @@ the outcome and control returns to 1.3.
 |---|---|---|
 | 3.1 Name the reason if none | An unexpected error gets its exception class (`field=`) and message (`detail=`). | Poison and refused records already have theirs. |
 | 3.2 Write the dead-letter log | One `ERROR` line on logger `dlq`: reason, field, topic, partition, offset, key, detail, body. | The record can be found and replayed. |
-| 3.3 Commit (Guaranteed Delivery) | The offset moves. | No record blocks a partition. |
 
 ---
 
@@ -172,10 +171,10 @@ sequenceDiagram
         P-->>S: inserted, projected, same
         S->>S: 2.2 decide the outcome
         S-->>R: stored or duplicate
-        R->>K: 1.3 commit the offset
+        R-->>K: route 1 returns, so the Kamelet commits the offset
     else a poison record
         R-)L: 3.2 write the record
-        R->>K: 3.3 commit the offset
+        R-->>K: route 1 returns, so the Kamelet commits the offset
     end
 ```
 
@@ -194,22 +193,22 @@ Reading the Designer? Find the step; the **Docs:** line of its note points to th
 | Topic | Reads the events topic | [Settings](conv-history-consumer.md#settings) |
 | 1.1 Decode | Schema id, registry schema, contract, projection | [Schema assurance](conv-history-consumer.md#schema-assurance), [Projection](conv-history-consumer.md#projection-what-becomes-a-message) |
 | 1.2 Route | Skips a tombstone, stores the rest | [What happens to each kind of record](conv-history-consumer.md#what-happens-to-each-kind-of-record) |
-| 1.3 Commit | Moves the offset, only now | same |
+| Kamelet source | Reads the topic; commits the offset when route 1 returns | [The Kamelet](#the-kamelet-and-how-to-add-another-consumer) |
 | 2.1 Write | One statement, one transaction | [The store](conv-history-consumer.md#the-store-one-statement-one-transaction) |
 | 2.2 Decide the outcome | stored, duplicate or conflict | [What happens to each kind of record](conv-history-consumer.md#what-happens-to-each-kind-of-record) |
 | Error rules (`errorRules`) | Poison, refused, dependency down, unexpected | same |
-| 3.1 to 3.3 | Name the reason, write the log, commit | [The dead-letter log](conv-history-consumer.md#the-dead-letter-log) |
+| 3.1 and 3.2 | Name the reason, write the log | [The dead-letter log](conv-history-consumer.md#the-dead-letter-log) |
 | Any pattern name | What the pattern is | [Pattern map](#pattern-map) |
 
 ## Pattern map
 
 | Pattern | Where | Camel element |
 |---|---|---|
-| Event-Driven Consumer | The topic | `from: kafka` |
+| Event-Driven Consumer | The topic | `from: kamelet:kafka-at-least-once-source` (inside it, `from: kafka`) |
 | Message Translator | 1.1 | `bean` (`decoder`) |
 | Content-Based Router | 1.2, 3.1 | `choice` |
 | Idempotent Consumer | 2.1: a redelivery writes nothing | `sql` with `ON CONFLICT DO NOTHING` |
-| Guaranteed Delivery | 1.3, 3.3: the offset moves after handling | `bean` (`offsetCommit`), `autoCommitEnable=false` |
+| Guaranteed Delivery | The Kamelet: the offset moves after handling | `script` that calls the manual commit, `autoCommitEnable=false` |
 | Invalid Message Channel | Poison, or data the database refuses | `onException` with `handled`, to `direct:deadLetter` |
 | Dead Letter Channel | Every unexpected error, after 3 retries | `errorHandler: deadLetterChannel` |
 | Pipeline | The steps of a route | the default of a route |
@@ -228,5 +227,30 @@ The idempotency is the database key `(conversation_id, sequence)`, not Camel's `
 - **A Dead Letter Channel for the unexpected, specific `onException` rules for the known.** An `onException` inherits the
   handler's retries unless it sets its own, so the poison rules set `maximumRedeliveries: 0` (the tests caught this).
 - **Small beans where YAML would be unclear**, each registered with `@BindToRegistry`.
+- **A Kamelet for what every consumer shares**: how a topic is read and when its offset moves ([below](#the-kamelet-and-how-to-add-another-consumer)).
 - **Commit after handling, never before:** manual commit, at-least-once, an idempotent store.
 - **A dedicated logger for the dead-letter log**, and health and metrics on.
+
+---
+
+## The Kamelet, and how to add another consumer
+
+A **Kamelet** is a route template with a declared interface (its parameters), used as an endpoint: `kamelet:<name>?param=value`
+([Camel's guide](https://camel.apache.org/camel-kamelets/next/development.html)). This repository has one,
+[`kamelets/kafka-at-least-once-source.kamelet.yaml`](../kamelets/kafka-at-least-once-source.kamelet.yaml), a *source*: it reads a Kafka
+topic and **commits the offset only when the route that uses it has finished with the record**.
+
+| | In the Kamelet (shared by every consumer) | In the project (one per consumer) |
+|---|---|---|
+| Reading | Topic, brokers, group, auto commit off, manual commit, bytes as the body | Which topic and group: three parameters |
+| Committing | After the route returns: stored, skipped or dead-lettered. If the route retries forever, it never returns and the offset does not move | Nothing: no commit step |
+| What the record means | Nothing | The decoder (the event contract), the store route (the SQL), the dead-letter route, the error rules |
+
+How Karavan treats it: a Kamelet kept in Karavan's **Custom Kamelets** project (the `kamelets/` folder of the repository) appears in the
+Designer's palette, and when a project is run, Karavan copies into it the custom Kamelets that its routes use (`uri: kamelet:<name>`).
+`scripts/devmode-local.sh` does the same for the local runner.
+
+**To add another consumer:** copy the project folder `ms-ml-conv-history-consumer/`, rename it, change `app.topic`, `app.kafka.groupId`
+and the port in its `docker-compose.yaml`, and replace the decoder and the store route with its own. Route 1 and the Kamelet stay as they
+are. A consumer of a different topic with a different contract needs only its own decoder and store; it never writes Kafka code or a
+commit again.

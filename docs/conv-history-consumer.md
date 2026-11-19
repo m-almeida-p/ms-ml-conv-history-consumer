@@ -18,9 +18,9 @@ each step:
 
 | Route | Steps |
 |---|---|
-| **1 Receive** | 1.1 Decode and validate the record (schema id, registry schema, contract, projection) → 1.2 Route by kind of record (a tombstone is skipped, any other record goes to route 2) → 1.3 Commit the offset, only now |
+| **1 Receive** | 1.1 Decode and validate the record (schema id, registry schema, contract, projection) → 1.2 Route by kind of record (a tombstone is skipped, any other record goes to route 2) The offset is committed by the Kamelet source when route 1 returns, not by a step of its own |
 | **2 Store** | 2.1 Write inbox, message and summary with one statement in one transaction → 2.2 Decide stored, duplicate or conflict → 2.3 Log the outcome |
-| **3 Dead-letter** | 3.1 Name the reason if no rule did → 3.2 Write the record to the dead-letter log → 3.3 Commit the offset |
+| **3 Dead-letter** | 3.1 Name the reason if no rule did → 3.2 Write the record to the dead-letter log. Its offset is committed by the Kamelet source, as for any record |
 
 Records that fail validation or that the store refuses go to route 3. A database or registry outage is retried
 forever and the offset does not move. Anything unexpected is retried 3 times, then goes to route 3 as `reason=unexpected`.
@@ -34,20 +34,24 @@ The tables live in the schema **`camel_history`** of the cluster's Postgres, apa
 
 | File | Role |
 |---|---|
-| `consume-conversation-events.camel.yaml` | Route 1, Receive: Kafka → decode → route → commit. |
+| `consume-conversation-events.camel.yaml` | Route 1, Receive: the Kamelet source (Kafka, commit) → decode → route. |
 | `store-conversation-history.camel.yaml` | Route 2, Store: the SQL statement, the outcome. Called as `direct:store`. |
 | `handle-errors-and-dead-letters.camel.yaml` | The error rules, and route 3, Dead-letter (`direct:deadLetter`). |
 | `PROJECT.md` | The legend, the numbering and the vocabulary, shown with the project in Karavan. |
 | `ConversationEventDecoder.java` | Schema id check, registry schema validation, contract, projection. |
 | `StoreOutcome.java` | Reads the store statement's result: `stored`, `duplicate`, or a conflict. |
-| `OffsetCommit.java` | Commits the offset by hand (auto commit is off). |
 | `StoreRefusal.java` | Names a store refusal for the dead-letter log: reason `store-rejected`, field `sqlstate-<code>`, found in the cause chain. |
 | `PoisonRecordException.java` | The exception for a record that can never be stored. |
 | `application.properties` | Camel settings, dependencies, the datasource and the `app.*` settings. |
 
 The four helpers are Java files because decoding bytes and validating JSON is clearer in code than in YAML. Each
 registers itself with `@BindToRegistry`, so the route refers to them by name (`decoder`, `storeOutcome`,
-`offsetCommit`, `storeRefusal`).
+`storeRefusal`).
+
+The route does not read Kafka itself: it starts from the Kamelet **`kafka-at-least-once-source`**, which lives in the repository's
+[`kamelets/`](../kamelets) folder (Karavan's *Custom Kamelets* project), not in this project's folder. It reads the topic with auto commit off,
+hands each record to route 1, and **commits the offset when route 1 returns** (stored, skipped or dead-lettered). If the route retries forever,
+it never returns and the offset does not move. [Why and how to reuse it](design.md#the-kamelet-and-how-to-add-another-consumer).
 
 ## Settings
 
@@ -131,7 +135,7 @@ valid.
 
 ## What happens to each kind of record
 
-*Designer: steps 1.2 Route, 1.3 Commit, 2.2 Decide the outcome, and the error rules (`errorRules`).*
+*Designer: steps 1.2 Route, 2.2 Decide the outcome, and the error rules (`errorRules`). The commit is in the Kamelet.*
 
 | Case | What happens | Offset |
 |---|---|---|
@@ -154,7 +158,7 @@ because the line keeps the body, the records can be replayed after the fix.
 
 ## The dead-letter log
 
-*Designer: route 3, steps 3.1 to 3.3.*
+*Designer: route 3, steps 3.1 and 3.2.*
 
 One line per poison record, on its own logger, `dlq`, at `ERROR`:
 

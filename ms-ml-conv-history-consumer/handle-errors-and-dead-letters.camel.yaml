@@ -145,9 +145,3 @@
             logName: dlq
             loggingLevel: ERROR
             message: "DLQ reason=${exchangeProperty.dlqReason} field=${exchangeProperty.dlqField} topic=${header.CamelKafkaTopic} partition=${header.CamelKafkaPartition} offset=${header.CamelKafkaOffset} key=${exchangeProperty.rawKey} detail=${exchangeProperty.dlqDetail} body=${exchangeProperty.rawText}"
-        - bean:
-            id: commitDeadLetterOffset
-            description: 3.3 Commit (Guaranteed Delivery)
-            note: "The offset moves, so no record blocks a partition. Docs: conv-history-consumer.md > What happens to each kind of record."
-            ref: offsetCommit
-            method: commit
