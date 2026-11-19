@@ -22,7 +22,7 @@ The Karavan project is the folder [`ms-ml-conv-history-consumer/`](ms-ml-conv-hi
 | `application.properties` | Settings (`app.*`), dependencies, datasource | |
 
 The Kafka reading and the offset commit are not in the project: they are in the **Kamelet** [`kamelets/kafka-at-least-once-source.kamelet.yaml`](kamelets/kafka-at-least-once-source.kamelet.yaml), which every consumer can reuse
-([how](docs/design.md#the-kamelet-and-how-to-add-another-consumer)).
+([how: docs/kamelets.md](docs/kamelets.md)).
 
 Route 2 cannot be reached without route 1 (the only caller) and route 3 (where a record it refuses goes), so the three stay together.
 

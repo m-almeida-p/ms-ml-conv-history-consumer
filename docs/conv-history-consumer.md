@@ -51,7 +51,7 @@ registers itself with `@BindToRegistry`, so the route refers to them by name (`d
 The route does not read Kafka itself: it starts from the Kamelet **`kafka-at-least-once-source`**, which lives in the repository's
 [`kamelets/`](../kamelets) folder (Karavan's *Custom Kamelets* project), not in this project's folder. It reads the topic with auto commit off,
 hands each record to route 1, and **commits the offset when route 1 returns** (stored, skipped or dead-lettered). If the route retries forever,
-it never returns and the offset does not move. [Why and how to reuse it](design.md#the-kamelet-and-how-to-add-another-consumer).
+it never returns and the offset does not move. [Why and how to reuse it](kamelets.md).
 
 ## Settings
 

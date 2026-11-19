@@ -6,6 +6,7 @@ Guides for the Apache Camel Karavan setup in this repository and for the Kafka c
 |---|---|
 | [handoff.md](handoff.md) | **You are picking the work up.** What this is, where it came from, the rules the owner set, how to change it safely, what is open. |
 | [design.md](design.md) | You want the picture first: the context, the containers, the three routes and their steps, the vocabulary, the legend and the Camel patterns used. |
+| [kamelets.md](kamelets.md) | **You want to add another consumer.** What the Kamelet does, its parameters, a smallest consumer you can copy, and what happens when a route fails. |
 | [conv-history-consumer.md](conv-history-consumer.md) | You want to know what the consumer does, how to run it, test it and replay messages. |
 | [karavan-setup.md](karavan-setup.md) | You need to start Karavan, understand how it is wired, or rebuild it from scratch. |
 | [testing.md](testing.md) | You want to run or add a test: what each one proves and what is not covered. |

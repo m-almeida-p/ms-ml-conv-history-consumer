@@ -50,6 +50,8 @@ docker logs ms-ml-conv-history-consumer 2>&1 | grep -c 'DLQ reason='            
 Needs the shared cluster up (`../cluster/scripts/up.sh`, network `yape-local`) and Karavan (`./scripts/up.sh`, UI on
 `http://localhost:9997`, bound to `127.0.0.1`). Start-up from nothing: [karavan-setup.md](karavan-setup.md).
 
+**To add another consumer** that reads a Kafka topic, read [kamelets.md](kamelets.md): the Kamelet is configured, not rewritten.
+
 ## The rules the owner set
 
 These stand until the owner changes them.

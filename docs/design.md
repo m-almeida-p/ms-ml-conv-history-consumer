@@ -250,7 +250,7 @@ How Karavan treats it: a Kamelet kept in Karavan's **Custom Kamelets** project (
 Designer's palette, and when a project is run, Karavan copies into it the custom Kamelets that its routes use (`uri: kamelet:<name>`).
 `scripts/devmode-local.sh` does the same for the local runner.
 
-**To add another consumer:** copy the project folder `ms-ml-conv-history-consumer/`, rename it, change `app.topic`, `app.kafka.groupId`
+**To add another consumer**, with the parameters, a smallest example and what happens when a route fails, read [kamelets.md](kamelets.md). In short: copy the project folder `ms-ml-conv-history-consumer/`, rename it, change `app.topic`, `app.kafka.groupId`
 and the port in its `docker-compose.yaml`, and replace the decoder and the store route with its own. Route 1 and the Kamelet stay as they
 are. A consumer of a different topic with a different contract needs only its own decoder and store; it never writes Kafka code or a
 commit again.
